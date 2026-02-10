@@ -31,6 +31,7 @@ BELIEF_CATEGORIES = {
     "fitness",
     "scheduling",
     "personality",
+    "meta",
 }
 
 

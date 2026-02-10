@@ -214,6 +214,95 @@ def retrieve_relevant_episodes(
     return [ep for _, ep in scored[:max_results]]
 
 
+META_REFLECTION_PROMPT = """\
+You are an expert coach reflecting on your own coaching effectiveness.
+Given the training block reflection below, evaluate your coaching decisions and generate meta-insights.
+
+You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no code fences.
+
+The JSON must follow this exact structure:
+{
+    "meta_beliefs": [
+        {
+            "text": "A specific coaching insight (e.g., 'This athlete responds better to longer easy runs than frequent short ones')",
+            "category": "meta",
+            "confidence": 0.7,
+            "reasoning": "Why this insight matters for future coaching"
+        }
+    ]
+}
+
+Rules:
+- Focus on actionable coaching insights, not generic observations
+- Each meta-belief should inform future plan generation or conversation style
+- Examples of good meta-beliefs:
+  - "Athlete runs easy sessions too fast — need to emphasize zone discipline in plans"
+  - "Motivation increases when sessions include race-specific elements"
+  - "Plan compliance drops on Thursdays — consider lighter sessions mid-week"
+  - "Athlete prefers direct feedback over gentle suggestions"
+- confidence: 0.0-1.0 based on how much supporting data exists
+- Empty array if no coaching insights are warranted
+"""
+
+
+def extract_meta_beliefs(episode: dict) -> list[dict]:
+    """Extract meta-beliefs about coaching effectiveness from a reflection episode.
+
+    Meta-beliefs capture the agent's self-evaluation of its coaching decisions.
+    They are stored as regular beliefs with category="meta" and influence
+    future behavior through the PrefEval injection pattern.
+
+    Args:
+        episode: A completed reflection episode dict.
+
+    Returns:
+        List of meta-belief dicts with text, category, confidence, reasoning.
+    """
+    client = get_client()
+
+    # Build context from the episode
+    observations = episode.get("key_observations", [])
+    lessons = episode.get("lessons", [])
+    patterns = episode.get("patterns_detected", [])
+    compliance = episode.get("compliance_rate", "?")
+
+    prompt = f"""\
+TRAINING BLOCK: {episode.get('block', 'unknown')}
+COMPLIANCE: {compliance}
+
+OBSERVATIONS:
+{chr(10).join(f'  - {o}' for o in observations) if observations else '  None'}
+
+LESSONS LEARNED:
+{chr(10).join(f'  - {l}' for l in lessons) if lessons else '  None'}
+
+PATTERNS DETECTED:
+{chr(10).join(f'  - {p}' for p in patterns) if patterns else '  None'}
+
+Based on this reflection, what coaching insights should I remember for future plans and conversations with this athlete?
+"""
+
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=[
+            genai.types.Content(
+                role="user",
+                parts=[genai.types.Part(text=prompt)],
+            ),
+        ],
+        config=genai.types.GenerateContentConfig(
+            system_instruction=META_REFLECTION_PROMPT,
+            temperature=0.4,
+        ),
+    )
+
+    try:
+        result = extract_json(response.text)
+        return result.get("meta_beliefs", [])
+    except (ValueError, AttributeError):
+        return []
+
+
 def _extract_keywords(context: dict) -> list[str]:
     """Extract search keywords from a planning context."""
     keywords = []

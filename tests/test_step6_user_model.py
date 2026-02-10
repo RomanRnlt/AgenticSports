@@ -442,6 +442,6 @@ class TestBeliefCategories:
     def test_all_expected_categories_exist(self):
         expected = {
             "preference", "constraint", "history", "motivation",
-            "physical", "fitness", "scheduling", "personality",
+            "physical", "fitness", "scheduling", "personality", "meta",
         }
         assert BELIEF_CATEGORIES == expected
