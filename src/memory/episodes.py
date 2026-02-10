@@ -94,8 +94,12 @@ def generate_reflection(
         (a.get("distance_meters", 0) or 0) / 1000 for a in activities
     )
 
+    # Generate a unique episode ID
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    ep_id = f"ep_{week_start}" if week_start != "unknown" else f"ep_{ts}"
+
     episode = {
-        "id": f"ep_{week_start}",
+        "id": ep_id,
         "block": f"2026-W{week_num:02d}" if isinstance(week_num, int) else f"week-{week_num}",
         "period": week_start,
         "prescribed_sessions": len(plan.get("sessions", [])),
@@ -122,6 +126,13 @@ def store_episode(episode: dict, storage_dir: str | Path | None = None) -> Path:
     ep_id = episode.get("id", f"ep_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     filename = f"{ep_id}.json"
     path = dest / filename
+
+    # Avoid overwriting existing episodes — append timestamp suffix
+    if path.exists():
+        ts = datetime.now().strftime("%H%M%S_%f")
+        filename = f"{ep_id}_{ts}.json"
+        path = dest / filename
+
     path.write_text(json.dumps(episode, indent=2))
     return path
 
