@@ -1,12 +1,12 @@
 """Training coach agent: generates weekly plans via Gemini."""
 
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 
 from google import genai
 
+from src.agent.json_utils import extract_json
 from src.agent.llm import MODEL, get_client
 from src.agent.prompts import COACH_SYSTEM_PROMPT, build_plan_prompt
 
@@ -37,19 +37,7 @@ def generate_plan(profile: dict) -> dict:
     )
 
     text = response.text.strip()
-
-    # Strip markdown code fences if present
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
-        text = re.sub(r"\n?```\s*$", "", text)
-        text = text.strip()
-
-    try:
-        plan = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Gemini returned invalid JSON: {e}\nRaw response:\n{text}")
-
-    return plan
+    return extract_json(text)
 
 
 def save_plan(plan: dict) -> Path:

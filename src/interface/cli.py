@@ -9,10 +9,11 @@ from rich.table import Table
 from rich.panel import Panel
 
 from src.agent.coach import generate_plan, save_plan
-from src.memory.profile import create_profile, save_profile
+from src.agent.state_machine import AgentCore
+from src.memory.profile import create_profile, save_profile, load_profile
 from src.tools.fit_parser import parse_fit_file
 from src.tools.metrics import calculate_trimp, classify_hr_zone
-from src.tools.activity_store import store_activity
+from src.tools.activity_store import store_activity, list_activities
 
 console = Console()
 
@@ -136,6 +137,83 @@ def import_activity(file_path: str) -> None:
     console.print(f"\n[green]Activity stored: {stored_path}[/green]")
 
 
+def run_assessment() -> None:
+    """Run a full assessment cycle: compare recent activities against current plan."""
+    import json
+
+    try:
+        profile = load_profile()
+    except FileNotFoundError:
+        console.print("[red]No athlete profile found. Run onboarding first.[/red]")
+        return
+
+    # Find the latest plan
+    plans_dir = Path(__file__).parent.parent.parent / "data" / "plans"
+    plan_files = sorted(plans_dir.glob("plan_*.json")) if plans_dir.exists() else []
+    if not plan_files:
+        console.print("[red]No training plan found. Generate a plan first.[/red]")
+        return
+
+    latest_plan = json.loads(plan_files[-1].read_text())
+    console.print(f"[yellow]Using plan: {plan_files[-1].name}[/yellow]")
+
+    # Get recent activities
+    activities = list_activities()
+    if not activities:
+        console.print("[red]No activities found. Import some training data first.[/red]")
+        return
+
+    console.print(f"[yellow]Analyzing {len(activities)} activities...[/yellow]\n")
+
+    # Run the agent cycle
+    agent = AgentCore()
+    try:
+        result = agent.run_cycle(profile, latest_plan, activities)
+    except Exception as e:
+        console.print(f"[red]Assessment failed: {e}[/red]")
+        return
+
+    # Display assessment
+    assessment = result.get("assessment", {}).get("assessment", {})
+    console.print(Panel(
+        f"Compliance: [cyan]{assessment.get('compliance', 'N/A')}[/cyan]\n"
+        f"Fitness trend: [cyan]{assessment.get('fitness_trend', 'N/A')}[/cyan]\n"
+        f"Fatigue: [cyan]{assessment.get('fatigue_level', 'N/A')}[/cyan]\n"
+        f"Injury risk: [cyan]{assessment.get('injury_risk', 'N/A')}[/cyan]",
+        title="Training Assessment",
+        style="blue",
+    ))
+
+    observations = assessment.get("observations", [])
+    if observations:
+        console.print("\n[bold]Observations:[/bold]")
+        for obs in observations:
+            console.print(f"  - {obs}")
+
+    # Display autonomy results
+    autonomy = result.get("autonomy_result", {})
+    auto_applied = autonomy.get("auto_applied", [])
+    proposals = autonomy.get("proposals", [])
+
+    if auto_applied:
+        console.print(f"\n[green]Auto-applied adjustments ({len(auto_applied)}):[/green]")
+        for adj in auto_applied:
+            console.print(f"  - {adj.get('description', '?')}")
+
+    if proposals:
+        console.print(f"\n[yellow]Proposed adjustments ({len(proposals)}):[/yellow]")
+        for adj in proposals:
+            impact = adj.get("classified_impact", adj.get("impact", "?"))
+            console.print(f"  [{impact}] {adj.get('description', '?')}")
+
+    # Save adjusted plan
+    adjusted_plan = result.get("adjusted_plan")
+    if adjusted_plan:
+        path = save_plan(adjusted_plan)
+        console.print(f"\n[green]Adjusted plan saved: {path}[/green]")
+        display_plan(adjusted_plan)
+
+
 def main(args: list[str] | None = None):
     """Main CLI entry point with argument parsing."""
     parser = argparse.ArgumentParser(
@@ -146,11 +224,19 @@ def main(args: list[str] | None = None):
         "--import", dest="import_file", metavar="FILE",
         help="Import a FIT file or JSON activity fixture",
     )
+    parser.add_argument(
+        "--assess", action="store_true",
+        help="Run assessment on latest activities vs current plan",
+    )
 
     parsed = parser.parse_args(args)
 
     if parsed.import_file:
         import_activity(parsed.import_file)
+        return
+
+    if parsed.assess:
+        run_assessment()
         return
 
     # Default: onboarding flow
