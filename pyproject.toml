@@ -20,6 +20,9 @@ packages = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests that call external APIs (Gemini)",
+]
 
 [dependency-groups]
 dev = [
