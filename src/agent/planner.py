@@ -21,19 +21,25 @@ In the JSON output, add a "adjustments_applied" field listing what was changed f
 """
 
 
-def generate_adjusted_plan(profile: dict, previous_plan: dict, assessment: dict) -> dict:
+def generate_adjusted_plan(
+    profile: dict,
+    previous_plan: dict,
+    assessment: dict,
+    relevant_episodes: list[dict] | None = None,
+) -> dict:
     """Generate an adjusted 1-week plan based on assessment results.
 
     Args:
         profile: Athlete profile
         previous_plan: The plan that was assessed
         assessment: Assessment result from assess_training()
+        relevant_episodes: Past episode reflections to inform planning
 
     Returns:
         New plan dict with adjustments_applied field
     """
     client = get_client()
-    prompt = _build_adjusted_plan_prompt(profile, previous_plan, assessment)
+    prompt = _build_adjusted_plan_prompt(profile, previous_plan, assessment, relevant_episodes)
 
     response = client.models.generate_content(
         model=MODEL,
@@ -53,7 +59,12 @@ def generate_adjusted_plan(profile: dict, previous_plan: dict, assessment: dict)
     return extract_json(text)
 
 
-def _build_adjusted_plan_prompt(profile: dict, previous_plan: dict, assessment: dict) -> str:
+def _build_adjusted_plan_prompt(
+    profile: dict,
+    previous_plan: dict,
+    assessment: dict,
+    relevant_episodes: list[dict] | None = None,
+) -> str:
     """Build prompt for adjusted plan generation."""
     goal = profile.get("goal", {})
     constraints = profile.get("constraints", {})
@@ -107,5 +118,23 @@ ASSESSMENT OF LAST WEEK:
 
 RECOMMENDED ADJUSTMENTS:
 {adj_text}
+{_format_episodes_section(relevant_episodes)}
 Incorporate these adjustments into the new plan. Include an "adjustments_applied" array in the output listing what you changed and why.
 """
+
+
+def _format_episodes_section(episodes: list[dict] | None) -> str:
+    """Format past episodes as a lessons section for the prompt."""
+    if not episodes:
+        return ""
+
+    lines = ["LESSONS FROM PAST TRAINING BLOCKS:"]
+    for ep in episodes:
+        block = ep.get("block", "?")
+        lines.append(f"\n  [{block}]")
+        for lesson in ep.get("lessons", []):
+            lines.append(f"  - {lesson}")
+        for pattern in ep.get("patterns_detected", []):
+            lines.append(f"  - Pattern: {pattern}")
+
+    return "\n".join(lines) + "\n"
