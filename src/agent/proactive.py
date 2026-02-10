@@ -1,6 +1,9 @@
-"""Proactive communication: triggers and messages for the athlete."""
+"""Proactive communication: triggers, message queue, and engagement tracking."""
 
-from datetime import datetime, date
+import json
+import uuid
+from datetime import datetime, date, timedelta
+from pathlib import Path
 
 
 def check_proactive_triggers(
@@ -183,3 +186,228 @@ def _detect_high_fatigue(activities: list[dict], episodes: list[dict]) -> bool:
         return True
 
     return False
+
+
+# ── Proactive Message Queue ──────────────────────────────────────
+
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
+DEFAULT_QUEUE_PATH = DATA_DIR / "user_model" / "proactive_queue.json"
+
+
+def _load_queue(queue_path: Path | None = None) -> list[dict]:
+    """Load the proactive message queue from disk."""
+    path = queue_path or DEFAULT_QUEUE_PATH
+    if not path.exists():
+        return []
+    return json.loads(path.read_text())
+
+
+def _save_queue(queue: list[dict], queue_path: Path | None = None) -> None:
+    """Save the proactive message queue to disk."""
+    path = queue_path or DEFAULT_QUEUE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(queue, indent=2))
+
+
+def queue_proactive_message(
+    trigger: dict,
+    priority: float = 0.5,
+    queue_path: Path | None = None,
+) -> dict:
+    """Add a proactive trigger to the message queue.
+
+    Args:
+        trigger: Trigger dict with type, priority, data fields.
+        priority: Numeric priority 0.0-1.0 (higher = more urgent).
+        queue_path: Optional path for the queue file (for testing).
+
+    Returns:
+        The queued message dict.
+    """
+    queue = _load_queue(queue_path)
+
+    msg = {
+        "id": f"msg_{uuid.uuid4().hex[:8]}",
+        "trigger_type": trigger.get("type", "unknown"),
+        "priority": priority,
+        "data": trigger.get("data", {}),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "delivered_at": None,
+        "status": "pending",
+        "engagement_tracking": {
+            "user_responded_at": None,
+            "response_latency_seconds": None,
+            "user_continued_session": False,
+            "session_turns_after_delivery": 0,
+        },
+    }
+
+    queue.append(msg)
+    _save_queue(queue, queue_path)
+    return msg
+
+
+def get_pending_messages(queue_path: Path | None = None) -> list[dict]:
+    """Return pending messages sorted by priority (highest first)."""
+    queue = _load_queue(queue_path)
+    pending = [m for m in queue if m.get("status") == "pending"]
+    pending.sort(key=lambda m: m.get("priority", 0), reverse=True)
+    return pending
+
+
+def deliver_message(
+    message_id: str,
+    queue_path: Path | None = None,
+) -> dict | None:
+    """Mark a message as delivered and record delivery timestamp.
+
+    Returns the updated message, or None if not found.
+    """
+    queue = _load_queue(queue_path)
+
+    for msg in queue:
+        if msg.get("id") == message_id:
+            msg["status"] = "delivered"
+            msg["delivered_at"] = datetime.now().isoformat(timespec="seconds")
+            _save_queue(queue, queue_path)
+            return msg
+
+    return None
+
+
+def record_engagement(
+    message_id: str,
+    responded: bool = False,
+    continued_session: bool = False,
+    turns_after: int = 0,
+    queue_path: Path | None = None,
+) -> dict | None:
+    """Record user engagement with a delivered proactive message.
+
+    Args:
+        message_id: ID of the delivered message.
+        responded: Whether the user responded to the message.
+        continued_session: Whether the user continued the session after delivery.
+        turns_after: Number of conversation turns after delivery.
+        queue_path: Optional path for the queue file.
+
+    Returns the updated message, or None if not found.
+    """
+    queue = _load_queue(queue_path)
+
+    for msg in queue:
+        if msg.get("id") == message_id and msg.get("status") == "delivered":
+            tracking = msg.get("engagement_tracking", {})
+            if responded and not tracking.get("user_responded_at"):
+                tracking["user_responded_at"] = datetime.now().isoformat(timespec="seconds")
+                delivered_at = msg.get("delivered_at")
+                if delivered_at:
+                    delivered_dt = datetime.fromisoformat(delivered_at)
+                    tracking["response_latency_seconds"] = int(
+                        (datetime.now() - delivered_dt).total_seconds()
+                    )
+            tracking["user_continued_session"] = continued_session
+            tracking["session_turns_after_delivery"] = turns_after
+            msg["engagement_tracking"] = tracking
+            _save_queue(queue, queue_path)
+            return msg
+
+    return None
+
+
+def expire_stale_messages(
+    max_age_days: int = 7,
+    queue_path: Path | None = None,
+) -> list[dict]:
+    """Expire pending messages older than max_age_days.
+
+    Returns the list of expired messages.
+    """
+    queue = _load_queue(queue_path)
+    cutoff = datetime.now() - timedelta(days=max_age_days)
+    expired = []
+
+    for msg in queue:
+        if msg.get("status") == "pending":
+            created = msg.get("created_at")
+            if created and datetime.fromisoformat(created) < cutoff:
+                msg["status"] = "expired"
+                expired.append(msg)
+
+    if expired:
+        _save_queue(queue, queue_path)
+
+    return expired
+
+
+# ── Silence Decay ────────────────────────────────────────────────
+
+
+def calculate_silence_decay(
+    last_interaction: str | None,
+    base_urgency: float = 0.3,
+) -> float:
+    """Calculate urgency boost based on time since last interaction.
+
+    Longer silence = higher motivation to initiate contact.
+    Returns a value 0.0-1.0 that can be added to base urgency.
+
+    Args:
+        last_interaction: ISO timestamp of last user interaction, or None.
+        base_urgency: Base urgency level before silence decay.
+    """
+    if not last_interaction:
+        return 0.5  # No interaction history — moderate boost
+
+    last_dt = datetime.fromisoformat(last_interaction)
+    days_silent = (datetime.now() - last_dt).total_seconds() / 86400
+
+    if days_silent < 1:
+        return 0.0  # Active user — no boost
+    elif days_silent < 3:
+        return 0.1  # Slightly quiet
+    elif days_silent < 5:
+        return 0.3  # Getting quiet
+    elif days_silent < 10:
+        return 0.5  # Noticeably absent
+    else:
+        return 0.7  # Extended silence — strong motivation
+
+
+def check_conversation_triggers(
+    user_model_data: dict,
+    last_interaction: str | None = None,
+) -> list[dict]:
+    """Check for conversation-based proactive triggers.
+
+    These triggers come from conversation patterns rather than FIT data:
+    - User hasn't chatted in 5+ days
+    - User expressed frustration last session
+    - Engagement is declining
+
+    Args:
+        user_model_data: User model structured_core or summary data.
+        last_interaction: ISO timestamp of last user interaction.
+
+    Returns list of trigger dicts.
+    """
+    triggers = []
+
+    # Silence-based check-in
+    if last_interaction:
+        last_dt = datetime.fromisoformat(last_interaction)
+        days_silent = (datetime.now() - last_dt).total_seconds() / 86400
+
+        if days_silent >= 5:
+            silence_urgency = calculate_silence_decay(last_interaction)
+            triggers.append({
+                "type": "silence_checkin",
+                "priority": "medium",
+                "urgency": silence_urgency,
+                "data": {
+                    "days_since_last_chat": round(days_silent, 1),
+                    "message": "It's been a while since we last chatted.",
+                },
+            })
+
+    return triggers
