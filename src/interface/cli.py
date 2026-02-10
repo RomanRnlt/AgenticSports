@@ -9,7 +9,10 @@ from rich.table import Table
 from rich.panel import Panel
 
 from src.agent.coach import generate_plan, save_plan
+from src.agent.proactive import check_proactive_triggers, format_proactive_message
 from src.agent.state_machine import AgentCore
+from src.agent.trajectory import assess_trajectory
+from src.memory.episodes import list_episodes
 from src.memory.profile import create_profile, save_profile, load_profile
 from src.tools.fit_parser import parse_fit_file
 from src.tools.metrics import calculate_trimp, classify_hr_zone
@@ -214,6 +217,114 @@ def run_assessment() -> None:
         display_plan(adjusted_plan)
 
 
+def _load_latest_plan() -> dict | None:
+    """Load the most recent training plan from data/plans/."""
+    import json as _json
+    plans_dir = Path(__file__).parent.parent.parent / "data" / "plans"
+    plan_files = sorted(plans_dir.glob("plan_*.json")) if plans_dir.exists() else []
+    if not plan_files:
+        return None
+    return _json.loads(plan_files[-1].read_text())
+
+
+def run_trajectory() -> None:
+    """Show full trajectory assessment."""
+    try:
+        profile = load_profile()
+    except FileNotFoundError:
+        console.print("[red]No athlete profile found. Run onboarding first.[/red]")
+        return
+
+    plan = _load_latest_plan()
+    if not plan:
+        console.print("[red]No training plan found.[/red]")
+        return
+
+    activities = list_activities()
+    episodes = list_episodes()
+
+    console.print("[yellow]Assessing training trajectory...[/yellow]\n")
+
+    try:
+        traj = assess_trajectory(profile, activities, episodes, plan)
+    except Exception as e:
+        console.print(f"[red]Trajectory assessment failed: {e}[/red]")
+        return
+
+    # Display trajectory
+    goal = traj.get("goal", {})
+    console.print(Panel(
+        f"Event: [cyan]{goal.get('event', '?')}[/cyan]\n"
+        f"Target: [cyan]{goal.get('target_time', '?')}[/cyan] by {goal.get('target_date', '?')}\n"
+        f"Weeks remaining: [cyan]{goal.get('weeks_remaining', '?')}[/cyan]",
+        title="Goal",
+        style="blue",
+    ))
+
+    trajectory = traj.get("trajectory", {})
+    on_track = trajectory.get("on_track", "unknown")
+    status_color = "green" if on_track else "red"
+    console.print(Panel(
+        f"On track: [{status_color}]{on_track}[/{status_color}]\n"
+        f"Predicted time: [cyan]{trajectory.get('predicted_race_time', '?')}[/cyan]\n"
+        f"Confidence: [cyan]{traj.get('confidence', '?')}[/cyan]\n"
+        f"{traj.get('confidence_explanation', '')}",
+        title="Trajectory",
+        style=status_color,
+    ))
+
+    recommendations = traj.get("recommendations", [])
+    if recommendations:
+        console.print("\n[bold]Recommendations:[/bold]")
+        for rec in recommendations:
+            console.print(f"  - {rec}")
+
+    risks = traj.get("risks", [])
+    if risks:
+        console.print("\n[bold]Risks:[/bold]")
+        for risk in risks:
+            console.print(f"  [{risk.get('probability', '?')}] {risk.get('risk', '?')}")
+            console.print(f"    Mitigation: {risk.get('mitigation', '?')}")
+
+
+def run_status() -> None:
+    """Quick status check with proactive messages."""
+    try:
+        profile = load_profile()
+    except FileNotFoundError:
+        console.print("[red]No athlete profile found.[/red]")
+        return
+
+    plan = _load_latest_plan()
+    activities = list_activities()
+    episodes = list_episodes()
+
+    console.print(Panel(
+        f"Athlete: [cyan]{profile.get('name', 'Unknown')}[/cyan]\n"
+        f"Goal: [cyan]{profile.get('goal', {}).get('event', '?')}[/cyan] "
+        f"by {profile.get('goal', {}).get('target_date', '?')}\n"
+        f"Activities: [cyan]{len(activities)}[/cyan] | "
+        f"Episodes: [cyan]{len(episodes)}[/cyan]",
+        title="ReAgt Status",
+        style="blue",
+    ))
+
+    if plan and activities and episodes:
+        try:
+            traj = assess_trajectory(profile, activities, episodes, plan)
+            triggers = check_proactive_triggers(profile, activities, episodes, traj)
+
+            if triggers:
+                console.print("\n[bold]Messages for you:[/bold]")
+                for trigger in triggers:
+                    msg = format_proactive_message(trigger, profile)
+                    priority = trigger.get("priority", "low")
+                    color = {"high": "red", "medium": "yellow", "low": "green"}.get(priority, "white")
+                    console.print(f"  [{color}]{msg}[/{color}]")
+        except Exception as e:
+            console.print(f"[dim]Could not generate trajectory: {e}[/dim]")
+
+
 def main(args: list[str] | None = None):
     """Main CLI entry point with argument parsing."""
     parser = argparse.ArgumentParser(
@@ -228,6 +339,14 @@ def main(args: list[str] | None = None):
         "--assess", action="store_true",
         help="Run assessment on latest activities vs current plan",
     )
+    parser.add_argument(
+        "--trajectory", action="store_true",
+        help="Show full trajectory assessment",
+    )
+    parser.add_argument(
+        "--status", action="store_true",
+        help="Quick status check with proactive messages",
+    )
 
     parsed = parser.parse_args(args)
 
@@ -237,6 +356,14 @@ def main(args: list[str] | None = None):
 
     if parsed.assess:
         run_assessment()
+        return
+
+    if parsed.trajectory:
+        run_trajectory()
+        return
+
+    if parsed.status:
+        run_status()
         return
 
     # Default: onboarding flow
