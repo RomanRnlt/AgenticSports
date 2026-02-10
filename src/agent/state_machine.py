@@ -30,13 +30,24 @@ class AgentCore:
         })
         self.state = new_state
 
-    def run_cycle(self, profile: dict, plan: dict, activities: list[dict]) -> dict:
+    def run_cycle(
+        self,
+        profile: dict,
+        plan: dict,
+        activities: list[dict],
+        user_model: "object | None" = None,
+        conversation_context: str | None = None,
+    ) -> dict:
         """Execute one full cognitive cycle.
 
         Args:
             profile: Athlete profile dict
             plan: Current training plan dict
             activities: List of activity dicts (actual training data)
+            user_model: Optional UserModel instance. When provided, active beliefs
+                        are injected into assessment and planning prompts.
+            conversation_context: Optional recent conversation text for subjective
+                                  context (e.g. "I've been sleeping badly").
 
         Returns:
             dict with assessment, adjustments, and updated plan
@@ -50,21 +61,34 @@ class AgentCore:
             "state_history": [],
         }
 
+        # Extract beliefs from user model if available
+        beliefs = None
+        if user_model is not None:
+            beliefs = user_model.get_active_beliefs(min_confidence=0.6)
+
         # PERCEIVING: activities already parsed and passed in
         self.transition(AgentState.PERCEIVING)
         self.context["profile"] = profile
         self.context["plan"] = plan
         self.context["activities"] = activities
+        if conversation_context:
+            self.context["conversation_context"] = conversation_context
 
         # REASONING: assess current training vs plan
         self.transition(AgentState.REASONING)
-        assessment = assess_training(profile, plan, activities)
+        assessment = assess_training(
+            profile, plan, activities,
+            conversation_context=conversation_context,
+            beliefs=beliefs,
+        )
         self.context["assessment"] = assessment
 
         # PLANNING: generate adjusted plan
         self.transition(AgentState.PLANNING)
         adjustments = assessment.get("recommended_adjustments", [])
-        adjusted_plan = generate_adjusted_plan(profile, plan, assessment)
+        adjusted_plan = generate_adjusted_plan(
+            profile, plan, assessment, beliefs=beliefs,
+        )
         self.context["adjusted_plan"] = adjusted_plan
 
         # PROPOSING: classify adjustments by impact

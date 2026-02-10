@@ -51,14 +51,32 @@ Rules:
 """
 
 
-def assess_training(profile: dict, plan: dict, activities: list[dict]) -> dict:
+def assess_training(
+    profile: dict,
+    plan: dict,
+    activities: list[dict],
+    conversation_context: str | None = None,
+    beliefs: list[dict] | None = None,
+) -> dict:
     """Send plan + actual activities to Gemini for structured assessment.
+
+    Args:
+        profile: Athlete profile dict.
+        plan: Current training plan dict.
+        activities: List of activity dicts.
+        conversation_context: Optional text from recent conversations (e.g. "I've been
+                              sleeping badly") to provide subjective context beyond FIT data.
+        beliefs: Optional list of active beliefs to inject as coach's notes.
 
     Returns a dict with assessment and recommended_adjustments.
     """
     client = get_client()
 
-    prompt = _build_assessment_prompt(profile, plan, activities)
+    prompt = _build_assessment_prompt(
+        profile, plan, activities,
+        conversation_context=conversation_context,
+        beliefs=beliefs,
+    )
 
     response = client.models.generate_content(
         model=MODEL,
@@ -78,7 +96,33 @@ def assess_training(profile: dict, plan: dict, activities: list[dict]) -> dict:
     return extract_json(text)
 
 
-def _build_assessment_prompt(profile: dict, plan: dict, activities: list[dict]) -> str:
+def _format_conversation_context(
+    conversation_context: str | None, beliefs: list[dict] | None
+) -> str:
+    """Format conversation context and beliefs for the assessment prompt."""
+    sections = []
+
+    if conversation_context:
+        sections.append(
+            f"ATHLETE'S RECENT SELF-REPORTED CONTEXT:\n{conversation_context}"
+        )
+
+    if beliefs:
+        from src.agent.prompts import _format_beliefs_section
+        beliefs_text = _format_beliefs_section(beliefs)
+        if beliefs_text:
+            sections.append(beliefs_text.strip())
+
+    return "\n\n".join(sections) + "\n" if sections else ""
+
+
+def _build_assessment_prompt(
+    profile: dict,
+    plan: dict,
+    activities: list[dict],
+    conversation_context: str | None = None,
+    beliefs: list[dict] | None = None,
+) -> str:
     """Build the user prompt for training assessment."""
     goal = profile.get("goal", {})
     fitness = profile.get("fitness", {})
@@ -108,6 +152,8 @@ def _build_assessment_prompt(profile: dict, plan: dict, activities: list[dict]) 
             f"{dur_min}min | {dist_km}km | HR {avg_hr} | Pace {pace_str} | TRIMP {trimp}"
         )
 
+    subjective_section = _format_conversation_context(conversation_context, beliefs)
+
     return f"""\
 Assess this athlete's training week:
 
@@ -120,5 +166,5 @@ PRESCRIBED PLAN ({len(prescribed)} sessions):
 ACTUAL TRAINING ({len(activities)} activities):
 {chr(10).join(actual_summary) if actual_summary else '  No activities recorded'}
 
-Analyze compliance, identify patterns, assess fitness trend and fatigue, and recommend adjustments.
+{subjective_section}Analyze compliance, identify patterns, assess fitness trend and fatigue, and recommend adjustments.
 """

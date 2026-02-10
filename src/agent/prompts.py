@@ -51,8 +51,38 @@ Rules for the sessions array:
 """
 
 
-def build_plan_prompt(profile: dict) -> str:
-    """Build the user prompt for training plan generation from an athlete profile."""
+def _format_beliefs_section(beliefs: list[dict] | None) -> str:
+    """Format active beliefs as a COACH'S NOTES section for prompt injection (PrefEval pattern).
+
+    Beliefs are grouped by category for readability.
+    Only beliefs with confidence >= 0.6 should be passed in.
+    """
+    if not beliefs:
+        return ""
+
+    by_category: dict[str, list[dict]] = {}
+    for b in beliefs:
+        cat = b.get("category", "general")
+        by_category.setdefault(cat, []).append(b)
+
+    lines = ["\nCOACH'S NOTES ON THIS ATHLETE (from past conversations):"]
+    for category, items in sorted(by_category.items()):
+        lines.append(f"  [{category.upper()}]")
+        for b in items:
+            conf = b.get("confidence", 0.7)
+            lines.append(f"    - {b.get('text', '?')} (confidence: {conf:.1f})")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_plan_prompt(profile: dict, beliefs: list[dict] | None = None) -> str:
+    """Build the user prompt for training plan generation from an athlete profile.
+
+    Args:
+        profile: Athlete profile dict with goal, constraints, fitness, sports.
+        beliefs: Optional list of active beliefs (>= 0.6 confidence) to inject
+                 as coach's notes. Grouped by category for LLM context.
+    """
     goal = profile.get("goal", {})
     constraints = profile.get("constraints", {})
     fitness = profile.get("fitness", {})
@@ -68,6 +98,8 @@ def build_plan_prompt(profile: dict) -> str:
     if not fitness_info:
         fitness_info = "- No fitness data available (assume beginner/unknown level)\n"
 
+    beliefs_section = _format_beliefs_section(beliefs)
+
     return f"""\
 Create a 1-week training plan for this athlete:
 
@@ -82,6 +114,6 @@ Constraints:
 - Training days per week: {constraints.get('training_days_per_week', 5)}
 - Max session duration: {constraints.get('max_session_minutes', 90)} minutes
 - Available sports: {', '.join(constraints.get('available_sports', sports))}
-
+{beliefs_section}
 Generate the plan starting from the next Monday. Use today's date context to calculate the week_start date.
 """

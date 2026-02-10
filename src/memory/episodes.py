@@ -54,14 +54,29 @@ def generate_reflection(
     activities: list[dict],
     assessment: dict,
     athlete_profile: dict,
+    conversation_context: str | None = None,
+    beliefs: list[dict] | None = None,
 ) -> dict:
     """Generate a structured reflection for a completed training block.
 
     Sends plan + activities + assessment to Gemini.
     Returns a complete episode dict ready for storage.
+
+    Args:
+        plan: The training plan that was followed.
+        activities: Actual activities performed.
+        assessment: Assessment results.
+        athlete_profile: Athlete profile dict.
+        conversation_context: Optional text from recent conversations providing
+                              subjective context about the training period.
+        beliefs: Optional list of active beliefs to inject as coach's notes.
     """
     client = get_client()
-    prompt = _build_reflection_prompt(plan, activities, assessment, athlete_profile)
+    prompt = _build_reflection_prompt(
+        plan, activities, assessment, athlete_profile,
+        conversation_context=conversation_context,
+        beliefs=beliefs,
+    )
 
     response = client.models.generate_content(
         model=MODEL,
@@ -224,7 +239,12 @@ def _extract_keywords(context: dict) -> list[str]:
 
 
 def _build_reflection_prompt(
-    plan: dict, activities: list[dict], assessment: dict, profile: dict
+    plan: dict,
+    activities: list[dict],
+    assessment: dict,
+    profile: dict,
+    conversation_context: str | None = None,
+    beliefs: list[dict] | None = None,
 ) -> str:
     """Build the prompt for reflection generation."""
     goal = profile.get("goal", {})
@@ -256,6 +276,19 @@ def _build_reflection_prompt(
     obs = assess.get("observations", [])
     obs_text = "\n".join(f"  - {o}" for o in obs) if obs else "  None"
 
+    # Conversation context and beliefs
+    subjective_section = ""
+    if conversation_context:
+        subjective_section += (
+            f"\nATHLETE'S SELF-REPORTED CONTEXT FROM CONVERSATIONS:\n"
+            f"{conversation_context}\n"
+        )
+    if beliefs:
+        from src.agent.prompts import _format_beliefs_section
+        beliefs_text = _format_beliefs_section(beliefs)
+        if beliefs_text:
+            subjective_section += beliefs_text
+
     return f"""\
 Reflect on this completed training block:
 
@@ -273,6 +306,6 @@ ASSESSMENT:
 - Fatigue: {assess.get('fatigue_level', 'N/A')}
 - Observations:
 {obs_text}
-
+{subjective_section}
 Generate specific, data-driven observations, actionable lessons, and patterns detected.
 """

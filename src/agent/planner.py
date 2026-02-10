@@ -26,6 +26,7 @@ def generate_adjusted_plan(
     previous_plan: dict,
     assessment: dict,
     relevant_episodes: list[dict] | None = None,
+    beliefs: list[dict] | None = None,
 ) -> dict:
     """Generate an adjusted 1-week plan based on assessment results.
 
@@ -34,12 +35,16 @@ def generate_adjusted_plan(
         previous_plan: The plan that was assessed
         assessment: Assessment result from assess_training()
         relevant_episodes: Past episode reflections to inform planning
+        beliefs: Optional list of active beliefs (>= 0.6 confidence) to inject
+                 into the adjustment prompt for personalization.
 
     Returns:
         New plan dict with adjustments_applied field
     """
     client = get_client()
-    prompt = _build_adjusted_plan_prompt(profile, previous_plan, assessment, relevant_episodes)
+    prompt = _build_adjusted_plan_prompt(
+        profile, previous_plan, assessment, relevant_episodes, beliefs=beliefs
+    )
 
     response = client.models.generate_content(
         model=MODEL,
@@ -64,8 +69,11 @@ def _build_adjusted_plan_prompt(
     previous_plan: dict,
     assessment: dict,
     relevant_episodes: list[dict] | None = None,
+    beliefs: list[dict] | None = None,
 ) -> str:
     """Build prompt for adjusted plan generation."""
+    from src.agent.prompts import _format_beliefs_section
+
     goal = profile.get("goal", {})
     constraints = profile.get("constraints", {})
     fitness = profile.get("fitness", {})
@@ -94,6 +102,8 @@ def _build_adjusted_plan_prompt(
     if not fitness_info:
         fitness_info = "- No fitness data available (assume beginner/unknown level)\n"
 
+    beliefs_section = _format_beliefs_section(beliefs)
+
     return f"""\
 Create an ADJUSTED 1-week training plan based on the following assessment:
 
@@ -118,7 +128,7 @@ ASSESSMENT OF LAST WEEK:
 
 RECOMMENDED ADJUSTMENTS:
 {adj_text}
-{_format_episodes_section(relevant_episodes)}
+{_format_episodes_section(relevant_episodes)}{beliefs_section}
 Incorporate these adjustments into the new plan. Include an "adjustments_applied" array in the output listing what you changed and why.
 """
 
