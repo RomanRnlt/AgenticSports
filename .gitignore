@@ -1,0 +1,31 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# uv
+uv.lock
+
+# OS
+.DS_Store
+
+# RALPH runtime state (not the config/specs)
+.ralph/logs/
+.ralph/.call_count
+.ralph/.last_reset
+.ralph/.exit_signals
+.ralph/.response_analysis
+.ralph/.circuit_breaker_state
+.ralph/.claude_session_id
+.ralph/.loop_start_sha
+.ralph/status.json
+
+# IDE
+.vscode/
+.idea/
