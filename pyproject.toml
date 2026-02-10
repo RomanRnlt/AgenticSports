@@ -9,6 +9,7 @@ dependencies = [
     "rich>=14.0",
     "watchdog>=6.0",
     "python-dotenv>=1.0",
+    "numpy>=2.4.2",
 ]
 
 [build-system]
