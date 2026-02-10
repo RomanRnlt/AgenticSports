@@ -1,5 +1,8 @@
 """CLI interface for ReAgt using Rich."""
 
+import argparse
+from pathlib import Path
+
 from rich.console import Console
 from rich.prompt import Prompt, IntPrompt
 from rich.table import Table
@@ -7,6 +10,9 @@ from rich.panel import Panel
 
 from src.agent.coach import generate_plan, save_plan
 from src.memory.profile import create_profile, save_profile
+from src.tools.fit_parser import parse_fit_file
+from src.tools.metrics import calculate_trimp, classify_hr_zone
+from src.tools.activity_store import store_activity
 
 console = Console()
 
@@ -95,8 +101,59 @@ def display_plan(plan: dict) -> None:
         )
 
 
-def main():
-    """Main CLI entry point: onboard -> generate plan -> display."""
+def import_activity(file_path: str) -> None:
+    """Import a FIT file (or JSON fixture), compute metrics, and store it."""
+    path = Path(file_path)
+    if not path.exists():
+        console.print(f"[red]File not found: {file_path}[/red]")
+        return
+
+    console.print(f"[yellow]Parsing {path.name}...[/yellow]")
+    activity = parse_fit_file(str(path))
+
+    sport = activity.get("sport", "unknown")
+    duration_sec = activity.get("duration_seconds", 0)
+    duration_min = duration_sec / 60 if duration_sec else 0
+    hr = activity.get("heart_rate", {})
+    avg_hr = hr.get("avg") if hr else None
+    distance = activity.get("distance_meters")
+
+    console.print(f"  Sport: [cyan]{sport}[/cyan]")
+    console.print(f"  Duration: [cyan]{duration_min:.0f} min[/cyan]")
+    if distance:
+        console.print(f"  Distance: [cyan]{distance / 1000:.1f} km[/cyan]")
+
+    # Calculate training load if HR data available
+    if avg_hr:
+        trimp = calculate_trimp(duration_min, avg_hr)
+        zone = classify_hr_zone(avg_hr)
+        console.print(f"  Avg HR: [cyan]{avg_hr} bpm[/cyan] (Zone {zone})")
+        console.print(f"  TRIMP: [cyan]{trimp}[/cyan]")
+        activity["trimp"] = trimp
+        activity["hr_zone"] = zone
+
+    stored_path = store_activity(activity)
+    console.print(f"\n[green]Activity stored: {stored_path}[/green]")
+
+
+def main(args: list[str] | None = None):
+    """Main CLI entry point with argument parsing."""
+    parser = argparse.ArgumentParser(
+        prog="reagt",
+        description="ReAgt - Adaptive Training Agent for Endurance Athletes",
+    )
+    parser.add_argument(
+        "--import", dest="import_file", metavar="FILE",
+        help="Import a FIT file or JSON activity fixture",
+    )
+
+    parsed = parser.parse_args(args)
+
+    if parsed.import_file:
+        import_activity(parsed.import_file)
+        return
+
+    # Default: onboarding flow
     profile = onboard_athlete()
 
     console.print("\n[yellow]Generating your training plan...[/yellow]\n")
