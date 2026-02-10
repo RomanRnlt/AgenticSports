@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.prompt import Prompt, IntPrompt
 from rich.table import Table
 from rich.panel import Panel
+from rich.markup import escape
 
 from src.agent.coach import generate_plan, save_plan
 from src.agent.proactive import check_proactive_triggers, format_proactive_message
@@ -14,6 +15,7 @@ from src.agent.state_machine import AgentCore
 from src.agent.trajectory import assess_trajectory
 from src.memory.episodes import list_episodes
 from src.memory.profile import create_profile, save_profile, load_profile
+from src.memory.user_model import UserModel
 from src.tools.fit_parser import parse_fit_file
 from src.tools.metrics import calculate_trimp, classify_hr_zone
 from src.tools.activity_store import store_activity, list_activities
@@ -325,6 +327,102 @@ def run_status() -> None:
             console.print(f"[dim]Could not generate trajectory: {e}[/dim]")
 
 
+def run_chat() -> None:
+    """Interactive chat mode with conversational coaching.
+
+    If no user model exists, starts in onboarding mode.
+    If a user model exists, starts in ongoing coaching mode.
+    """
+    from src.agent.onboarding import OnboardingEngine
+    from src.agent.conversation import ConversationEngine
+
+    user_model = UserModel.load_or_create()
+    is_new_user = not user_model.structured_core.get("sports")
+
+    if is_new_user:
+        # Onboarding mode
+        engine = OnboardingEngine(user_model=user_model)
+        greeting = engine.start()
+        console.print(Panel(escape(greeting), title="ReAgt Coach", style="blue"))
+
+        while True:
+            try:
+                user_input = Prompt.ask("\n[bold]You[/bold]")
+            except (KeyboardInterrupt, EOFError):
+                user_input = "exit"
+
+            if user_input.strip().lower() in ("exit", "quit", "q"):
+                engine.end_session()
+                user_model.save()
+                console.print("[dim]Session saved. See you next time![/dim]")
+                break
+
+            response = engine.process_message(user_input)
+            console.print(Panel(escape(response), title="ReAgt Coach", style="blue"))
+
+            if engine.is_onboarding_complete():
+                console.print(
+                    "\n[yellow]Great, I have enough to create your first plan![/yellow]"
+                )
+                profile = user_model.project_profile()
+                try:
+                    plan = generate_plan(profile)
+                    path = save_plan(plan)
+                    console.print(f"[green]Plan saved to {path}[/green]\n")
+                    display_plan(plan)
+                except Exception as e:
+                    console.print(f"[red]Plan generation failed: {e}[/red]")
+
+                engine.end_session()
+                user_model.save()
+                console.print("[dim]Session saved. See you next time![/dim]")
+                break
+    else:
+        # Ongoing coaching mode
+        engine = ConversationEngine(user_model=user_model)
+        session_id = engine.start_session()
+
+        # Deliver proactive messages on startup
+        plan = _load_latest_plan()
+        activities = list_activities()
+        episodes = list_episodes()
+        if plan and activities and episodes:
+            try:
+                profile = user_model.project_profile()
+                traj = assess_trajectory(profile, activities, episodes, plan)
+                triggers = check_proactive_triggers(profile, activities, episodes, traj)
+                if triggers:
+                    console.print(Panel(
+                        "\n".join(
+                            format_proactive_message(t, profile)
+                            for t in triggers
+                        ),
+                        title="Notifications",
+                        style="yellow",
+                    ))
+            except Exception:
+                pass  # proactive check is best-effort
+
+        console.print(
+            Panel("Welcome back! What's on your mind?", title="ReAgt Coach", style="blue")
+        )
+
+        while True:
+            try:
+                user_input = Prompt.ask("\n[bold]You[/bold]")
+            except (KeyboardInterrupt, EOFError):
+                user_input = "exit"
+
+            if user_input.strip().lower() in ("exit", "quit", "q"):
+                engine.end_session()
+                user_model.save()
+                console.print("[dim]Session saved. See you next time![/dim]")
+                break
+
+            response = engine.process_message(user_input)
+            console.print(Panel(escape(response), title="ReAgt Coach", style="blue"))
+
+
 def main(args: list[str] | None = None):
     """Main CLI entry point with argument parsing."""
     parser = argparse.ArgumentParser(
@@ -347,6 +445,14 @@ def main(args: list[str] | None = None):
         "--status", action="store_true",
         help="Quick status check with proactive messages",
     )
+    parser.add_argument(
+        "--chat", action="store_true",
+        help="Enter interactive chat mode (default when no flags given)",
+    )
+    parser.add_argument(
+        "--onboard-legacy", action="store_true",
+        help="Use legacy form-based onboarding (deprecated)",
+    )
 
     parsed = parser.parse_args(args)
 
@@ -366,24 +472,25 @@ def main(args: list[str] | None = None):
         run_status()
         return
 
-    # Default: onboarding flow
-    profile = onboard_athlete()
-
-    console.print("\n[yellow]Generating your training plan...[/yellow]\n")
-
-    try:
-        plan = generate_plan(profile)
-    except ValueError as e:
-        console.print(f"[red]Error generating plan: {e}[/red]")
+    if parsed.onboard_legacy:
+        # Legacy form-based onboarding
+        profile = onboard_athlete()
+        console.print("\n[yellow]Generating your training plan...[/yellow]\n")
+        try:
+            plan = generate_plan(profile)
+        except ValueError as e:
+            console.print(f"[red]Error generating plan: {e}[/red]")
+            return
+        except Exception as e:
+            console.print(f"[red]Failed to connect to Gemini: {e}[/red]")
+            return
+        path = save_plan(plan)
+        console.print(f"[green]Plan saved to {path}[/green]\n")
+        display_plan(plan)
         return
-    except Exception as e:
-        console.print(f"[red]Failed to connect to Gemini: {e}[/red]")
-        return
 
-    path = save_plan(plan)
-    console.print(f"[green]Plan saved to {path}[/green]\n")
-
-    display_plan(plan)
+    # Default: chat mode (same as --chat)
+    run_chat()
 
 
 if __name__ == "__main__":
