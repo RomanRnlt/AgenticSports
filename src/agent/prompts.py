@@ -1,5 +1,7 @@
 """System prompts for the ReAgt training coach agent."""
 
+from datetime import date, datetime
+
 COACH_SYSTEM_PROMPT = """\
 You are an experienced endurance sports coach specializing in running, cycling, swimming, and general fitness.
 
@@ -43,11 +45,12 @@ The JSON must follow this exact structure:
 }
 
 Rules for the sessions array:
-- Include exactly as many training sessions as the athlete's training_days_per_week
-- Each session's duration_minutes must not exceed the athlete's max_session_minutes
+- The athlete's training_days_per_week is a guideline. If their stated sport distribution requires more sessions, include them. Use the COACH'S NOTES to determine the actual number and type of sessions.
+- Duration: max_session_minutes is the GENERAL limit. Check COACH'S NOTES for weekday vs weekend differences and adjust session durations accordingly.
 - Include a mix of session types appropriate for the athlete's goal event
 - Sessions should be spread across the week (Monday through Sunday)
 - Days not included in sessions are rest days
+- If the athlete uses specific platforms (e.g., Zwift, TrainerRoad), reference them in the session descriptions
 """
 
 
@@ -115,5 +118,6 @@ Constraints:
 - Max session duration: {constraints.get('max_session_minutes', 90)} minutes
 - Available sports: {', '.join(constraints.get('available_sports', sports))}
 {beliefs_section}
-Generate the plan starting from the next Monday. Use today's date context to calculate the week_start date.
+TODAY'S DATE: {date.today().isoformat()} ({date.today().strftime('%A')})
+Generate the plan starting from the next Monday after today.
 """

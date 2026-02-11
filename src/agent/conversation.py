@@ -53,19 +53,23 @@ def _truncate(text: str, max_chars: int) -> str:
 CONVERSATION_SYSTEM_PROMPT = """\
 You are ReAgt, an experienced endurance sports coach. You help athletes with running, cycling, swimming, and general fitness through natural conversation.
 
+TODAY'S DATE: {today}
+
 ## Your Core Behaviors
 - Be warm, knowledgeable, and data-driven
 - Ask clarifying questions when you need more information
 - Reference specific data points when available (pace, HR, distance, etc.)
 - Be concise but thorough -- match the athlete's communication style
 - NEVER make up training data. Only reference data you have been given.
+- When the athlete asks a question, ANSWER it with your coaching knowledge. Do not deflect by asking for more data.
 
 ## What You Must Do With EVERY User Message
 Analyze the message and decide:
 1. What natural coaching response to give
 2. Whether any new beliefs about the athlete can be extracted
-3. Whether a training cycle (plan generation/assessment) should be triggered
-4. Whether onboarding information gathering is complete
+3. Whether fitness metrics can be DERIVED from any performance data mentioned (race times, FTP, known paces) → set structured_core_updates for fitness.estimated_vo2max and fitness.threshold_pace_min_km
+4. Whether a training cycle (plan generation/assessment) should be triggered
+5. Whether onboarding information gathering is complete
 
 ## Belief Extraction Rules
 Extract beliefs when the user reveals:
@@ -77,6 +81,40 @@ Extract beliefs when the user reveals:
 - History (past races, training background, previous injuries)
 
 Do NOT extract trivial greetings or conversation fillers as beliefs.
+
+IMPORTANT - Belief categories must be ACCURATE. Use the correct category for each belief:
+- "scheduling" for availability, training days, time constraints, weekday/weekend differences
+- "constraint" for physical limitations, time limits, equipment constraints
+- "fitness" for race times, performance data, VO2max, HR data, FTP, paces
+- "motivation" for goals, race targets, what drives them
+- "history" for past performances, training background, injuries
+- "preference" for sport preferences, workout type preferences, coaching style preferences
+- "physical" for body metrics, injuries, health conditions
+- "personality" for communication style, coaching relationship preferences
+
+Do NOT default everything to "preference". Choose the MOST SPECIFIC category.
+
+## Fitness Derivation (Critical)
+When the athlete mentions ANY performance data, derive fitness metrics:
+- Race times (e.g., "10km in 42:30", "half marathon in 1:42") → estimate VO2max and threshold pace
+- Cycling FTP (e.g., "FTP 260W at 75kg") → estimate VO2max from FTP (approximate: VO2max ≈ FTP_per_kg * 10.8 + 7)
+- Known paces or power data → derive threshold estimates
+- Put these estimates into structured_core_updates as fitness.estimated_vo2max and fitness.threshold_pace_min_km
+- For cyclists without running data, threshold_pace_min_km can remain null, but VO2max should be estimated from cycling power
+- Also estimate appropriate HR zones if resting/max HR is known
+
+## Date Handling (Critical)
+When the athlete mentions dates, ALWAYS convert to ISO format (YYYY-MM-DD) for structured_core_updates:
+- "August" or "im August" → "2026-08-15" (mid-month if no specific date)
+- "September 2026" → "2026-09-15"
+- "Q3 2026" → "2026-09-01"
+- Always use the CURRENT YEAR ({year}) or later. Never use past years.
+
+## Constraints Handling
+Capture the FULL picture of constraints:
+- Set max_session_minutes to the MAXIMUM session duration across the whole week (including weekends)
+- If the athlete has different limits for weekdays vs weekends, the weekday limit will be captured in beliefs
+- Example: weekday 90min, weekend 3h → max_session_minutes=180, belief captures "weekday limit is 90 minutes"
 
 ## Triggering a Training Cycle
 Trigger a cycle when:
@@ -90,23 +128,23 @@ Do NOT trigger for casual conversation, status updates, or simple questions.
 ## Response Format
 You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no code fences.
 
-{
+{{
     "response_text": "Your natural coaching response to the athlete",
     "extracted_beliefs": [
-        {
+        {{
             "text": "One-sentence belief statement about the athlete",
             "category": "scheduling|preference|constraint|history|motivation|physical|fitness|personality",
             "confidence": 0.5-0.95,
             "reasoning": "Brief explanation of why you extracted this"
-        }
+        }}
     ],
-    "structured_core_updates": {
+    "structured_core_updates": {{
         "field.path": "value"
-    },
+    }},
     "trigger_cycle": false,
     "cycle_reason": null,
     "onboarding_complete": false
-}
+}}
 
 Rules for the JSON:
 - extracted_beliefs: array of 0+ beliefs. Empty array if nothing to extract.
@@ -288,12 +326,16 @@ class ConversationEngine:
         prompt = self._build_conversation_prompt(user_message, phase)
 
         client = get_client()
+        system_prompt = CONVERSATION_SYSTEM_PROMPT.format(
+            today=datetime.now().date().isoformat(),
+            year=datetime.now().year,
+        )
         response = client.models.generate_content(
             model=MODEL,
             contents=prompt,
             config=genai.types.GenerateContentConfig(
                 system_instruction=_truncate(
-                    CONVERSATION_SYSTEM_PROMPT,
+                    system_prompt,
                     TOKEN_BUDGETS[phase]["system"],
                 ),
                 temperature=0.7,
@@ -361,6 +403,15 @@ class ConversationEngine:
             parts.append(
                 f"=== ATHLETE PROFILE & COACH'S NOTES ===\n"
                 f"{_truncate(model_summary, budgets['model'])}\n"
+            )
+
+        # Level 2.5: Current Training Plan (if available)
+        current_plan = self._load_current_plan()
+        if current_plan:
+            plan_text = self._format_plan_for_context(current_plan)
+            parts.append(
+                f"=== CURRENT TRAINING PLAN ===\n"
+                f"{_truncate(plan_text, 3000)}\n"
             )
 
         # Level 3: Cross-Session Context (last 2-3 session summaries)
@@ -813,6 +864,50 @@ class ConversationEngine:
         corpus_tokens = bm25s.tokenize(texts, show_progress=False)
         self._bm25_index = bm25s.BM25()
         self._bm25_index.index(corpus_tokens)
+
+    # ── Plan Context ─────────────────────────────────────────────
+
+    def _load_current_plan(self) -> dict | None:
+        """Load the most recent training plan from data/plans/."""
+        plans_dir = self._data_dir / "plans"
+        if not plans_dir.exists():
+            return None
+        plan_files = sorted(plans_dir.glob("plan_*.json"))
+        if not plan_files:
+            return None
+        try:
+            return json.loads(plan_files[-1].read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def _format_plan_for_context(self, plan: dict) -> str:
+        """Format a training plan as concise text for prompt injection."""
+        lines = []
+        week_start = plan.get("week_start", "?")
+        lines.append(f"Week starting {week_start}:")
+
+        for s in plan.get("sessions", []):
+            day = s.get("day", "?")
+            sport = s.get("sport", "?")
+            stype = s.get("type", "?")
+            dur = s.get("duration_minutes", "?")
+            pace = s.get("target_pace_min_km", "")
+            hr = s.get("target_hr_zone", "")
+            desc = s.get("description", "")
+            target = f" @ {pace}" if pace else (f" {hr}" if hr else "")
+            lines.append(f"  {day}: {sport} - {stype} ({dur}min){target}")
+            if desc:
+                lines.append(f"    {desc}")
+
+        summary = plan.get("weekly_summary", {})
+        if summary:
+            lines.append(
+                f"  Summary: {summary.get('total_sessions', '?')} sessions, "
+                f"{summary.get('total_duration_minutes', '?')}min total, "
+                f"focus: {summary.get('focus', '?')}"
+            )
+
+        return "\n".join(lines)
 
     # ── Properties ───────────────────────────────────────────────
 

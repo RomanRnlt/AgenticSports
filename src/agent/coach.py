@@ -13,14 +13,18 @@ from src.agent.prompts import COACH_SYSTEM_PROMPT, build_plan_prompt
 PLANS_DIR = Path(__file__).parent.parent.parent / "data" / "plans"
 
 
-def generate_plan(profile: dict) -> dict:
+def generate_plan(profile: dict, beliefs: list[dict] | None = None) -> dict:
     """Send athlete profile to Gemini and return a structured training plan.
+
+    Args:
+        profile: Athlete profile dict (from UserModel.project_profile()).
+        beliefs: Active beliefs to inject as coach's notes for personalization.
 
     Raises ValueError if the response is not valid JSON.
     Raises google.genai errors on API failure.
     """
     client = get_client()
-    user_prompt = build_plan_prompt(profile)
+    user_prompt = build_plan_prompt(profile, beliefs=beliefs)
 
     response = client.models.generate_content(
         model=MODEL,

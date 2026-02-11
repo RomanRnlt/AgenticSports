@@ -365,8 +365,9 @@ def run_chat() -> None:
                     "\n[yellow]Great, I have enough to create your first plan![/yellow]"
                 )
                 profile = user_model.project_profile()
+                beliefs = user_model.get_active_beliefs(min_confidence=0.6)
                 try:
-                    plan = generate_plan(profile)
+                    plan = generate_plan(profile, beliefs=beliefs)
                     path = save_plan(plan)
                     console.print(f"[green]Plan saved to {path}[/green]\n")
                     display_plan(plan)
