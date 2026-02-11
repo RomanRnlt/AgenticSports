@@ -279,7 +279,7 @@ class UserModel:
         parts = field_path.split(".")
         target = self.structured_core
         for part in parts[:-1]:
-            if part not in target:
+            if part not in target or not isinstance(target[part], dict):
                 target[part] = {}
             target = target[part]
         target[parts[-1]] = value
