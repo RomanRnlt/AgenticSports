@@ -348,6 +348,7 @@ def compose_startup_greeting(
     user_model,
     plan: dict | None,
     imported: list[dict],
+    reflection_result: dict | None = None,
 ) -> str:
     """Compose a coherent coaching greeting for session startup.
 
@@ -358,6 +359,9 @@ def compose_startup_greeting(
         user_model: UserModel instance (for goal, structured_core).
         plan: Current training plan dict (may be None).
         imported: List of newly imported activity dicts from run_import().
+        reflection_result: Optional reflection pipeline result dict. When
+            present, belief updates are formatted and injected into the
+            greeting prompt so the LLM can communicate them transparently.
 
     Returns:
         A greeting string. Never raises, never returns empty.
@@ -375,6 +379,12 @@ def compose_startup_greeting(
     # Build import summary inline (avoid circular import from cli)
     import_summary = _format_import_summary(imported)
 
+    # Build reflection update summary if available
+    reflection_summary = ""
+    if reflection_result:
+        from src.agent.reflection import format_belief_update_summary
+        reflection_summary = format_belief_update_summary(reflection_result)
+
     # Edge case: no plan AND no activities -> minimal greeting
     if not plan and not activities:
         return "Welcome! I'm your training coach. Let's get started -- tell me about your goals or import some training data."
@@ -389,7 +399,9 @@ def compose_startup_greeting(
         )
 
     # Build the LLM user message from assessment data
-    user_message = _build_greeting_user_message(assessment, import_summary)
+    user_message = _build_greeting_user_message(
+        assessment, import_summary, reflection_summary=reflection_summary,
+    )
 
     # Try LLM call
     try:
@@ -418,7 +430,9 @@ def compose_startup_greeting(
         log.warning("LLM greeting failed (%s), using fallback", exc)
 
     # Fallback: Python-formatted greeting
-    return _build_fallback_greeting(assessment, import_summary)
+    return _build_fallback_greeting(
+        assessment, import_summary, reflection_summary=reflection_summary,
+    )
 
 
 def _format_import_summary(imported: list[dict]) -> str:
@@ -449,7 +463,11 @@ def _format_import_summary(imported: list[dict]) -> str:
     return f"Found {count} new {noun}: {', '.join(summaries)}"
 
 
-def _build_greeting_user_message(assessment: dict, import_summary: str) -> str:
+def _build_greeting_user_message(
+    assessment: dict,
+    import_summary: str,
+    reflection_summary: str = "",
+) -> str:
     """Build the structured user message for the greeting LLM call."""
     parts = []
 
@@ -514,10 +532,18 @@ def _build_greeting_user_message(assessment: dict, import_summary: str) -> str:
         for t in triggers:
             parts.append(f"  - [{t.get('priority', 'low')}] {t.get('type', '?')}: {t.get('data', {})}")
 
+    # Reflection updates (injected after triggers so LLM can weave them in)
+    if reflection_summary:
+        parts.append(f"\n{reflection_summary}")
+
     return "\n".join(parts)
 
 
-def _build_fallback_greeting(assessment: dict, import_summary: str) -> str:
+def _build_fallback_greeting(
+    assessment: dict,
+    import_summary: str,
+    reflection_summary: str = "",
+) -> str:
     """Build a Python-formatted fallback greeting when LLM is unavailable.
 
     Produces a readable message from computed assessment data without any LLM call.
@@ -564,6 +590,10 @@ def _build_fallback_greeting(assessment: dict, import_summary: str) -> str:
             parts.append("Great consistency lately -- keep it up!")
         elif ttype == "fitness_improving":
             parts.append("Your fitness trend is looking positive!")
+
+    # Reflection updates
+    if reflection_summary:
+        parts.append(reflection_summary)
 
     # Closing
     if goal_type == "race_target":

@@ -511,11 +511,29 @@ def run_chat() -> None:
         from src.agent.startup import compose_startup_greeting
 
         plan = _load_latest_plan()
+
+        # Generate reflection if due (before greeting so results feed into it)
+        reflection_result = None
+        try:
+            from src.agent.reflection import check_and_generate_reflections
+            all_activities = list_activities()
+            reflection_result = check_and_generate_reflections(
+                user_model=user_model,
+                plan=plan,
+                activities=all_activities,
+            )
+            if reflection_result:
+                console.print("[dim]Training reflection generated.[/dim]")
+        except Exception as exc:
+            import logging as _log
+            _log.getLogger(__name__).warning("Reflection generation failed: %s", exc)
+
         console.print("[dim]Analyzing your training...[/dim]")
         greeting = compose_startup_greeting(
             user_model=user_model,
             plan=plan,
             imported=imported,
+            reflection_result=reflection_result,
         )
 
         if not greeting:
