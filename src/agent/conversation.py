@@ -318,6 +318,25 @@ class ConversationEngine:
 
         return summary
 
+    def inject_startup_greeting(self, greeting: str) -> None:
+        """Inject the startup greeting as the first agent turn in session history.
+
+        This ensures the LLM has context about what the coach said on startup,
+        providing conversation continuity.
+
+        Args:
+            greeting: The greeting text displayed to the user on startup.
+        """
+        if not greeting:
+            return
+
+        self._append_to_session(
+            role="agent",
+            content=greeting,
+            metadata={"artifacts": ["startup_greeting"]},
+        )
+        self._turn_count += 1
+
     # ── Main Message Processing ──────────────────────────────────
 
     def process_message(self, user_message: str) -> str:

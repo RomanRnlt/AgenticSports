@@ -387,7 +387,7 @@ def run_chat() -> None:
     from src.agent.onboarding import OnboardingEngine
     from src.agent.conversation import ConversationEngine
 
-    run_import()
+    imported = run_import()
 
     user_model = UserModel.load_or_create()
     is_new_user = not user_model.structured_core.get("sports")
@@ -436,30 +436,24 @@ def run_chat() -> None:
         engine = ConversationEngine(user_model=user_model)
         session_id = engine.start_session()
 
-        # Deliver proactive messages on startup
-        plan = _load_latest_plan()
-        activities = list_activities()
-        episodes = list_episodes()
-        if plan and activities and episodes:
-            try:
-                profile = user_model.project_profile()
-                traj = assess_trajectory(profile, activities, episodes, plan)
-                triggers = check_proactive_triggers(profile, activities, episodes, traj)
-                if triggers:
-                    console.print(Panel(
-                        "\n".join(
-                            format_proactive_message(t, profile)
-                            for t in triggers
-                        ),
-                        title="Notifications",
-                        style="yellow",
-                    ))
-            except Exception:
-                pass  # proactive check is best-effort
+        # Compose coherent coaching greeting
+        from src.agent.startup import compose_startup_greeting
 
-        console.print(
-            Panel("Welcome back! What's on your mind?", title="ReAgt Coach", style="blue")
+        plan = _load_latest_plan()
+        console.print("[dim]Analyzing your training...[/dim]")
+        greeting = compose_startup_greeting(
+            user_model=user_model,
+            plan=plan,
+            imported=imported,
         )
+
+        if not greeting:
+            greeting = "Welcome back! What's on your mind?"
+
+        console.print(Panel(escape(greeting), title="ReAgt Coach", style="blue"))
+
+        # Store greeting as first agent turn for conversation continuity
+        engine.inject_startup_greeting(greeting)
 
         while True:
             try:
