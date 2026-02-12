@@ -58,6 +58,7 @@ class UserModel:
                 "event": None,
                 "target_date": None,
                 "target_time": None,
+                "goal_type": None,
             },
             "fitness": {
                 "estimated_vo2max": None,
