@@ -1,14 +1,19 @@
-"""Startup coaching pipeline: goal type inference and assessment computation.
+"""Startup coaching pipeline: goal type inference, assessment, and greeting composition.
 
 Computes deterministic assessment data for the startup greeting. All arithmetic
 is done here so the LLM never computes numbers -- it only interprets and coaches.
+The greeting LLM call synthesizes the computed data into a coherent coaching message.
 
 Public API:
     infer_goal_type(goal) -> str
     compute_startup_assessment(plan, activities, goal) -> dict
+    compose_startup_greeting(user_model, plan, imported) -> str
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Goal type classification
@@ -332,3 +337,239 @@ def _detect_triggers(
             })
 
     return triggers
+
+
+# ---------------------------------------------------------------------------
+# Greeting composition (LLM call + fallback)
+# ---------------------------------------------------------------------------
+
+
+def compose_startup_greeting(
+    user_model,
+    plan: dict | None,
+    imported: list[dict],
+) -> str:
+    """Compose a coherent coaching greeting for session startup.
+
+    Makes one LLM call to produce a warm, data-informed greeting. Falls back
+    to a Python-formatted summary if the LLM call fails for any reason.
+
+    Args:
+        user_model: UserModel instance (for goal, structured_core).
+        plan: Current training plan dict (may be None).
+        imported: List of newly imported activity dicts from run_import().
+
+    Returns:
+        A greeting string. Never raises, never returns empty.
+    """
+    goal = user_model.structured_core.get("goal", {})
+
+    # Lazy import to avoid circular dependency
+    from src.tools.activity_store import list_activities
+
+    activities = list_activities()
+
+    # Compute the assessment
+    assessment = compute_startup_assessment(plan, activities, goal)
+
+    # Build import summary inline (avoid circular import from cli)
+    import_summary = _format_import_summary(imported)
+
+    # Edge case: no plan AND no activities -> minimal greeting
+    if not plan and not activities:
+        return "Welcome! I'm your training coach. Let's get started -- tell me about your goals or import some training data."
+
+    # Edge case: plan exists but no activities
+    if plan and not activities:
+        goal_summary = assessment.get("goal_summary", "your training")
+        return (
+            f"I see you have a plan set up for {goal_summary}. "
+            "Once you start logging activities, I'll be able to track your progress and give tailored advice. "
+            "Ready to get started?"
+        )
+
+    # Build the LLM user message from assessment data
+    user_message = _build_greeting_user_message(assessment, import_summary)
+
+    # Try LLM call
+    try:
+        from src.agent.llm import get_client
+        from src.agent.prompts import GREETING_SYSTEM_PROMPT
+        from src.agent.json_utils import extract_json
+        from google import genai
+
+        client = get_client()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=user_message,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=GREETING_SYSTEM_PROMPT,
+                temperature=0.7,
+            ),
+        )
+
+        result = extract_json(response.text)
+        greeting = result.get("greeting", "")
+        if greeting and len(greeting) > 10:
+            return greeting
+
+        log.warning("LLM greeting was empty or too short, using fallback")
+    except Exception as exc:
+        log.warning("LLM greeting failed (%s), using fallback", exc)
+
+    # Fallback: Python-formatted greeting
+    return _build_fallback_greeting(assessment, import_summary)
+
+
+def _format_import_summary(imported: list[dict]) -> str:
+    """Build a human-readable import summary string (inline, no cli import).
+
+    Examples:
+        "Found 3 new activities: Running 8.2km, Cycling 45.0km, Strength 60min"
+        "" (empty string if nothing imported)
+    """
+    if not imported:
+        return ""
+
+    summaries = []
+    for act in imported:
+        sport = (act.get("sport") or "unknown").title()
+        distance = act.get("distance_meters")
+        duration_sec = act.get("duration_seconds")
+
+        if distance and distance > 0:
+            summaries.append(f"{sport} {distance / 1000:.1f}km")
+        elif duration_sec and duration_sec > 0:
+            summaries.append(f"{sport} {round(duration_sec / 60)}min")
+        else:
+            summaries.append(sport)
+
+    count = len(imported)
+    noun = "activity" if count == 1 else "activities"
+    return f"Found {count} new {noun}: {', '.join(summaries)}"
+
+
+def _build_greeting_user_message(assessment: dict, import_summary: str) -> str:
+    """Build the structured user message for the greeting LLM call."""
+    parts = []
+
+    # Goal info
+    goal_type = assessment.get("goal_type", "general")
+    goal_summary = assessment.get("goal_summary", "General fitness")
+    parts.append(f"GOAL TYPE: {goal_type}")
+    parts.append(f"GOAL: {goal_summary}")
+
+    # Import info
+    if import_summary:
+        parts.append(f"\nIMPORTED: {import_summary}")
+
+    # Session matching
+    sm = assessment.get("session_matching")
+    if sm:
+        parts.append(f"\nSESSION MATCHING:")
+        parts.append(f"  Matched: {sm.get('matched_count', 0)} of {sm.get('planned_count', 0)} planned sessions")
+        parts.append(f"  Missed: {sm.get('missed_count', 0)}")
+        parts.append(f"  Unplanned: {sm.get('unplanned_count', 0)}")
+        matched_details = sm.get("matched", [])
+        if matched_details:
+            for m in matched_details[:5]:  # limit detail lines
+                parts.append(
+                    f"  - {m.get('sport', '?')} on {m.get('date', '?')}: "
+                    f"duration delta {m.get('duration_delta_pct', 0):+.0f}%, "
+                    f"intensity {m.get('intensity_match', 'unknown')}"
+                )
+
+    # Weekly compliance
+    wc = assessment.get("weekly_compliance")
+    if wc:
+        parts.append(f"\nWEEKLY COMPLIANCE:")
+        parts.append(f"  Rate: {wc.get('compliance_rate', 0):.0%}")
+        parts.append(f"  Volume actual: {wc.get('volume_actual_min', 0)} min")
+        parts.append(f"  Volume planned: {wc.get('volume_planned_min', 0)} min")
+        parts.append(f"  Volume delta: {wc.get('volume_delta_pct', 0):+.1f}%")
+
+    # Intensity summary
+    intensity = assessment.get("intensity_summary")
+    if intensity:
+        parts.append(f"\nINTENSITY: {intensity.get('match', 'unknown')}")
+        parts.append(
+            f"  On target: {intensity.get('on_target', 0)}, "
+            f"Lower: {intensity.get('lower_than_planned', 0)}, "
+            f"Higher: {intensity.get('higher_than_planned', 0)}"
+        )
+
+    # Trends
+    trends = assessment.get("trends", {})
+    parts.append(f"\nTRENDS:")
+    parts.append(f"  Volume: {trends.get('volume_direction', 'no data')}")
+    parts.append(f"  TRIMP (training load): {trends.get('trimp_direction', 'no data')}")
+    spw = trends.get("sessions_per_week", [])
+    if spw:
+        parts.append(f"  Sessions per week (recent): {spw}")
+
+    # Triggers
+    triggers = assessment.get("triggers", [])
+    if triggers:
+        parts.append(f"\nTRIGGERS:")
+        for t in triggers:
+            parts.append(f"  - [{t.get('priority', 'low')}] {t.get('type', '?')}: {t.get('data', {})}")
+
+    return "\n".join(parts)
+
+
+def _build_fallback_greeting(assessment: dict, import_summary: str) -> str:
+    """Build a Python-formatted fallback greeting when LLM is unavailable.
+
+    Produces a readable message from computed assessment data without any LLM call.
+    """
+    parts = []
+
+    goal_type = assessment.get("goal_type", "general")
+
+    # Opening
+    wc = assessment.get("weekly_compliance")
+    if wc:
+        rate = wc.get("compliance_rate", 0)
+        matched = wc.get("matched_count", 0)
+        planned = wc.get("planned_count", 0)
+        parts.append(
+            f"Welcome back! You completed {matched} of {planned} planned sessions "
+            f"({rate:.0%} compliance)."
+        )
+    else:
+        parts.append("Welcome back!")
+
+    # Import mention
+    if import_summary:
+        parts.append(import_summary + ".")
+
+    # Trend mention
+    trends = assessment.get("trends", {})
+    vol = trends.get("volume_direction", "no data")
+    if vol != "no data" and vol != "stable":
+        parts.append(f"Your training volume is {vol}.")
+    elif vol == "stable":
+        parts.append("Your training volume has been steady.")
+
+    # Trigger mention (pick first one)
+    triggers = assessment.get("triggers", [])
+    if triggers:
+        t = triggers[0]
+        ttype = t.get("type", "")
+        if ttype == "fatigue_warning":
+            parts.append("Your training load has been climbing -- keep an eye on recovery.")
+        elif ttype == "compliance_low":
+            parts.append("Looks like you've been missing some sessions. Let's talk about what's going on.")
+        elif ttype == "great_consistency":
+            parts.append("Great consistency lately -- keep it up!")
+        elif ttype == "fitness_improving":
+            parts.append("Your fitness trend is looking positive!")
+
+    # Closing
+    if goal_type == "race_target":
+        goal_summary = assessment.get("goal_summary", "your race")
+        parts.append(f"Let's chat about your preparation for {goal_summary}.")
+    else:
+        parts.append("What would you like to work on today?")
+
+    return " ".join(parts)
