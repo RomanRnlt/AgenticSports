@@ -21,10 +21,10 @@ SESSIONS_DIR = DATA_DIR / "sessions"
 # ── Dynamic Token Budgets (ACL 2025: Token-Budget-Aware Reasoning) ────
 # Approximate char limits (1 token ~ 4 chars)
 TOKEN_BUDGETS = {
-    "onboarding": {"system": 6000, "model": 1200, "cross": 0, "rolling": 1200, "recent": 8000},
-    "early":      {"system": 4800, "model": 4000, "cross": 2000, "rolling": 2000, "recent": 10000},
-    "ongoing":    {"system": 3200, "model": 8000, "cross": 4000, "rolling": 3200, "recent": 16000},
-    "planning":   {"system": 3200, "model": 10000, "cross": 6000, "rolling": 2000, "recent": 12000},
+    "onboarding": {"system": 6000, "model": 1200, "activity": 0,    "cross": 0,    "rolling": 1200, "recent": 8000},
+    "early":      {"system": 4800, "model": 4000, "activity": 3000, "cross": 2000, "rolling": 2000, "recent": 10000},
+    "ongoing":    {"system": 3200, "model": 8000, "activity": 4000, "cross": 4000, "rolling": 3200, "recent": 16000},
+    "planning":   {"system": 3200, "model": 10000,"activity": 4000, "cross": 6000, "rolling": 2000, "recent": 12000},
 }
 
 # Rolling summary is regenerated every N new turns
@@ -405,8 +405,20 @@ class ConversationEngine:
                 f"{_truncate(model_summary, budgets['model'])}\n"
             )
 
-        # Level 2.5: Current Training Plan (if available)
+        # Load plan early so both activity context and plan section can use it
         current_plan = self._load_current_plan()
+
+        # Level 2.3: Training Data (activity context)
+        if budgets.get("activity", 0) > 0:
+            from src.tools.activity_context import build_activity_context
+            activity_ctx = build_activity_context(plan=current_plan)
+            if activity_ctx:
+                parts.append(
+                    f"=== TRAINING DATA ===\n"
+                    f"{_truncate(activity_ctx, budgets['activity'])}\n"
+                )
+
+        # Level 2.5: Current Training Plan (if available)
         if current_plan:
             plan_text = self._format_plan_for_context(current_plan)
             parts.append(
