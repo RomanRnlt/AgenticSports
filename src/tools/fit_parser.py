@@ -9,7 +9,8 @@ import fitdecode
 def parse_fit_file(file_path: str) -> dict:
     """Parse a FIT file and return structured activity data.
 
-    Returns a dict with sport, duration, HR, pace, distance, power, elevation.
+    Returns a dict with sport, sub_sport, duration, HR, pace/speed, distance,
+    power, elevation, zone_distribution, and source_file.
     Also supports loading pre-parsed JSON fixtures for testing.
     """
     path = Path(file_path)
@@ -20,6 +21,8 @@ def parse_fit_file(file_path: str) -> dict:
 
     # Parse actual FIT file
     sport = "unknown"
+    sub_sport = None
+    sport_from_session = False
     start_time = None
     duration_seconds = None
     distance_meters = None
@@ -28,28 +31,69 @@ def parse_fit_file(file_path: str) -> dict:
     power_values = []
     altitude_values = []
     calories = None
+    zone_distribution = None
+    zone_distribution_source = None
+    hr_zone_boundaries = None
+    device_max_hr = None
+    device_resting_hr = None
 
     with fitdecode.FitReader(str(path)) as fit:
         for frame in fit:
             if frame.frame_type != fitdecode.FIT_FRAME_DATA:
                 continue
 
-            if frame.name == "sport":
-                sport_field = frame.get_value("sport", fallback=None)
-                if sport_field:
-                    sport = _normalize_sport(str(sport_field))
+            if frame.name == "session":
+                # Session frame is primary source for sport detection
+                session_sport = _get_field(frame, "sport")
+                if session_sport and not sport_from_session:
+                    sport = _normalize_sport(
+                        str(session_sport),
+                        str(_get_field(frame, "sub_sport") or ""),
+                    )
+                    sub_sport = str(_get_field(frame, "sub_sport")) if _get_field(frame, "sub_sport") else None
+                    sport_from_session = True
 
-            elif frame.name == "session":
                 start_time = _get_field(frame, "start_time")
                 duration_seconds = _get_field(frame, "total_elapsed_time")
                 distance_meters = _get_field(frame, "total_distance")
                 calories = _get_field(frame, "total_calories")
-                # Session-level HR
+                # Session-level HR as fallback
                 if not hr_values:
                     avg_hr = _get_field(frame, "avg_heart_rate")
                     max_hr = _get_field(frame, "max_heart_rate")
                     if avg_hr and max_hr:
                         hr_values = [avg_hr, max_hr]  # fallback
+
+            elif frame.name == "sport":
+                # Sport frame is fallback source for sport detection
+                if not sport_from_session:
+                    sport_field = _get_field(frame, "sport")
+                    if sport_field:
+                        sport_sub = str(_get_field(frame, "sub_sport") or "")
+                        sport = _normalize_sport(str(sport_field), sport_sub)
+                        if not sub_sport:
+                            sub_sport = str(_get_field(frame, "sub_sport")) if _get_field(frame, "sub_sport") else None
+
+            elif frame.name == "time_in_zone":
+                # Extract device-computed zone distribution (session-level)
+                ref = _get_field(frame, "reference_mesg")
+                if ref == "session" and zone_distribution is None:
+                    hr_zones_raw = _get_field(frame, "time_in_hr_zone")
+                    if hr_zones_raw and isinstance(hr_zones_raw, (list, tuple)):
+                        zone_distribution = _build_zone_distribution(hr_zones_raw)
+                        zone_distribution_source = "device"
+
+                    boundaries_raw = _get_field(frame, "hr_zone_high_boundary")
+                    if boundaries_raw and isinstance(boundaries_raw, (list, tuple)):
+                        hr_zone_boundaries = list(boundaries_raw)
+
+                    dmhr = _get_field(frame, "max_heart_rate")
+                    if dmhr and isinstance(dmhr, (int, float)):
+                        device_max_hr = int(dmhr)
+
+                    drhr = _get_field(frame, "resting_heart_rate")
+                    if drhr and isinstance(drhr, (int, float)):
+                        device_resting_hr = int(drhr)
 
             elif frame.name == "record":
                 hr = _get_field(frame, "heart_rate")
@@ -67,18 +111,48 @@ def parse_fit_file(file_path: str) -> dict:
 
     # Build result
     result = {
+        "source_file": path.name,
         "sport": sport,
-        "start_time": str(start_time) if start_time else None,
+        "sub_sport": sub_sport,
+        "start_time": start_time.isoformat() if hasattr(start_time, "isoformat") else str(start_time) if start_time else None,
         "duration_seconds": round(duration_seconds) if duration_seconds else None,
         "distance_meters": round(distance_meters) if distance_meters else None,
         "heart_rate": _build_hr(hr_values),
-        "pace": _build_pace(speed_values, sport),
+        "pace": _build_pace(speed_values, sport, distance_meters),
+        "speed": _build_speed(speed_values, sport),
         "power": _build_power(power_values),
         "elevation": _build_elevation(altitude_values),
         "calories": calories,
+        "zone_distribution": zone_distribution,
+        "zone_distribution_source": zone_distribution_source,
     }
 
+    # Include device HR zone metadata if available
+    if hr_zone_boundaries:
+        result["hr_zone_boundaries"] = hr_zone_boundaries
+    if device_max_hr:
+        result["device_max_hr"] = device_max_hr
+    if device_resting_hr:
+        result["device_resting_hr"] = device_resting_hr
+
     return result
+
+
+def is_activity_file(file_path: str) -> bool:
+    """Fast check (~1ms) whether a FIT file is an activity (has session frame).
+
+    Returns True as soon as a session frame is found.
+    Returns False if no session frame found or on any parse error.
+    """
+    try:
+        with fitdecode.FitReader(str(file_path)) as fit:
+            for frame in fit:
+                if frame.frame_type == fitdecode.FIT_FRAME_DATA:
+                    if frame.name == "session":
+                        return True
+        return False
+    except Exception:
+        return False
 
 
 def _get_field(frame, field_name):
@@ -89,18 +163,60 @@ def _get_field(frame, field_name):
         return None
 
 
-def _normalize_sport(sport: str) -> str:
-    """Normalize sport names to our standard types."""
+def _normalize_sport(sport: str, sub_sport: str = "") -> str:
+    """Normalize sport names to our standard types, using sub_sport for disambiguation."""
     sport = sport.lower().strip()
+    sub_sport = sub_sport.lower().strip() if sub_sport else ""
+
+    # Sub-sport specific disambiguation
+    if sport == "training" and sub_sport == "strength_training":
+        return "strength"
+    if sport == "fitness_equipment" and sub_sport == "elliptical":
+        return "elliptical"
+    if sport == "fitness_equipment":
+        return "cross_training"
+    if sport == "racket" and sub_sport == "padel":
+        return "padel"
+    if sport == "racket":
+        return "racket"
+
+    # Direct sport mappings
     mapping = {
         "running": "running",
+        "walking": "walking",
         "cycling": "cycling",
         "swimming": "swimming",
-        "training": "strength",
-        "generic": "strength",
+        "training": "training",
+        "generic": "other",
         "strength_training": "strength",
+        "stand_up_paddleboarding": "sup",
+        "rowing": "rowing",
     }
     return mapping.get(sport, sport)
+
+
+def _build_zone_distribution(hr_zones_raw: list | tuple) -> dict:
+    """Convert time_in_hr_zone tuple to zone distribution dict.
+
+    Index 0 = below zone 1 (add to zone_1).
+    Indices 1-5 = zones 1-5.
+    Index 6+ = above zone 5 (add to zone_5).
+    """
+    zones = {f"zone_{i}_seconds": 0.0 for i in range(1, 6)}
+
+    for i, val in enumerate(hr_zones_raw):
+        if not isinstance(val, (int, float)):
+            continue
+        if i == 0:
+            # Below zone 1 -> add to zone 1
+            zones["zone_1_seconds"] += float(val)
+        elif 1 <= i <= 5:
+            zones[f"zone_{i}_seconds"] += float(val)
+        else:
+            # Above zone 5 -> add to zone 5
+            zones["zone_5_seconds"] += float(val)
+
+    return zones
 
 
 def _build_hr(hr_values: list) -> dict | None:
@@ -114,19 +230,58 @@ def _build_hr(hr_values: list) -> dict | None:
     }
 
 
-def _build_pace(speed_values: list, sport: str) -> dict | None:
-    """Build pace summary (min/km) from speed values (m/s)."""
-    if not speed_values or sport not in ("running",):
+def _build_pace(speed_values: list, sport: str, distance_meters: float | None = None) -> dict | None:
+    """Build pace summary from speed values (m/s).
+
+    Returns pace in min/km for running and walking.
+    Returns pace in min/100m for swimming (when distance < 10000m).
+    """
+    if not speed_values:
         return None
-    # Filter out zeros
+
+    # Pace for running and walking (min/km)
+    if sport in ("running", "walking"):
+        valid_speeds = [s for s in speed_values if s > 0.1]
+        if not valid_speeds:
+            return None
+        avg_speed = sum(valid_speeds) / len(valid_speeds)  # m/s
+        max_speed = max(valid_speeds)
+        return {
+            "avg_min_per_km": round(1000 / (avg_speed * 60), 2) if avg_speed > 0 else None,
+            "best_min_per_km": round(1000 / (max_speed * 60), 2) if max_speed > 0 else None,
+        }
+
+    # Pace for swimming (min/100m)
+    if sport == "swimming" and distance_meters is not None and distance_meters < 10000:
+        valid_speeds = [s for s in speed_values if s > 0.01]
+        if not valid_speeds:
+            return None
+        avg_speed = sum(valid_speeds) / len(valid_speeds)  # m/s
+        max_speed = max(valid_speeds)
+        return {
+            "avg_min_per_100m": round(100 / (avg_speed * 60), 2) if avg_speed > 0 else None,
+            "best_min_per_100m": round(100 / (max_speed * 60), 2) if max_speed > 0 else None,
+        }
+
+    return None
+
+
+def _build_speed(speed_values: list, sport: str) -> dict | None:
+    """Build speed summary (km/h) for cycling, rowing, sup, and other non-running/walking sports."""
+    if not speed_values:
+        return None
+    # Speed is for sports that don't use pace
+    if sport in ("running", "walking", "swimming"):
+        return None
+
     valid_speeds = [s for s in speed_values if s > 0.1]
     if not valid_speeds:
         return None
     avg_speed = sum(valid_speeds) / len(valid_speeds)  # m/s
     max_speed = max(valid_speeds)
     return {
-        "avg_min_per_km": round(1000 / (avg_speed * 60), 2) if avg_speed > 0 else None,
-        "best_min_per_km": round(1000 / (max_speed * 60), 2) if max_speed > 0 else None,
+        "avg_km_h": round(avg_speed * 3.6, 2),
+        "max_km_h": round(max_speed * 3.6, 2),
     }
 
 
