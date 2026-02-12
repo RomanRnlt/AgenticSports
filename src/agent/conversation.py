@@ -914,6 +914,37 @@ class ConversationEngine:
         self._bm25_index = bm25s.BM25()
         self._bm25_index.index(corpus_tokens)
 
+    @staticmethod
+    def _format_targets_text(targets: dict) -> str:
+        """Format sport-specific targets as compact text for LLM context.
+
+        Similar to cli.py's _format_targets but uses space separators
+        (not pipes) since this is for LLM consumption, not human display.
+
+        Running: "5:30-6:00/km Zone 2"
+        Cycling: "180-200W Zone 3-4 85-95rpm"
+        Swimming: "1:45-1:55/100m Zone 2-3"
+        General: "Zone 2-3 RPE 6-7"
+        """
+        if not targets:
+            return ""
+
+        parts = []
+        if "pace_min_km" in targets:
+            parts.append(f"{targets['pace_min_km']}/km")
+        if "power_watts" in targets:
+            parts.append(f"{targets['power_watts']}W")
+        if "pace_min_100m" in targets:
+            parts.append(f"{targets['pace_min_100m']}/100m")
+        if "cadence_rpm" in targets:
+            parts.append(f"{targets['cadence_rpm']}rpm")
+        if "hr_zone" in targets:
+            parts.append(targets["hr_zone"])
+        if "rpe" in targets:
+            parts.append(f"RPE {targets['rpe']}")
+
+        return " ".join(parts)
+
     # ── Plan Context ─────────────────────────────────────────────
 
     def _load_current_plan(self) -> dict | None:
@@ -930,7 +961,11 @@ class ConversationEngine:
             return None
 
     def _format_plan_for_context(self, plan: dict) -> str:
-        """Format a training plan as concise text for prompt injection."""
+        """Format a training plan as concise text for prompt injection.
+
+        Handles both old flat-format plans (target_pace_min_km, description)
+        and new structured-steps plans (steps array with repeat groups).
+        """
         lines = []
         week_start = plan.get("week_start", "?")
         lines.append(f"Week starting {week_start}:")
@@ -939,14 +974,51 @@ class ConversationEngine:
             day = s.get("day", "?")
             sport = s.get("sport", "?")
             stype = s.get("type", "?")
-            dur = s.get("duration_minutes", "?")
-            pace = s.get("target_pace_min_km", "")
-            hr = s.get("target_hr_zone", "")
-            desc = s.get("description", "")
-            target = f" @ {pace}" if pace else (f" {hr}" if hr else "")
-            lines.append(f"  {day}: {sport} - {stype} ({dur}min){target}")
-            if desc:
-                lines.append(f"    {desc}")
+
+            if s.get("steps"):
+                # New format: structured workout steps
+                dur = s.get(
+                    "total_duration_minutes",
+                    s.get("duration_minutes", "?"),
+                )
+                lines.append(f"  {day}: {sport} - {stype} ({dur}min)")
+
+                for step in s["steps"]:
+                    step_type = step.get("type", "?")
+
+                    if step_type == "repeat":
+                        count = step.get("repeat_count", 1)
+                        lines.append(f"    {count}x:")
+                        for sub in step.get("steps", []):
+                            sub_type = sub.get("type", "?").title()
+                            sub_dur = sub.get("duration", "")
+                            sub_targets = self._format_targets_text(
+                                sub.get("targets", {})
+                            )
+                            at_str = f" @ {sub_targets}" if sub_targets else ""
+                            lines.append(f"      {sub_type} {sub_dur}{at_str}")
+                    else:
+                        st = step_type.title()
+                        dur_s = step.get("duration", "")
+                        targets_text = self._format_targets_text(
+                            step.get("targets", {})
+                        )
+                        at_str = f" @ {targets_text}" if targets_text else ""
+                        lines.append(f"    {st} {dur_s}{at_str}")
+
+                notes = s.get("notes", "")
+                if notes:
+                    lines.append(f"    Note: {notes}")
+            else:
+                # Old flat format: preserve existing behavior exactly
+                dur = s.get("duration_minutes", "?")
+                pace = s.get("target_pace_min_km", "")
+                hr = s.get("target_hr_zone", "")
+                desc = s.get("description", "")
+                target = f" @ {pace}" if pace else (f" {hr}" if hr else "")
+                lines.append(f"  {day}: {sport} - {stype} ({dur}min){target}")
+                if desc:
+                    lines.append(f"    {desc}")
 
         summary = plan.get("weekly_summary", {})
         if summary:
