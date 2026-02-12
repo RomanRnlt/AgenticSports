@@ -9,8 +9,10 @@ Public API:
     format_pace(min_per_unit, unit="km") -> str
     format_zone_distribution(zones, duration_seconds) -> str
     compute_weekly_trends(activities) -> list[dict]
+    match_plan_sessions(plan, activities) -> dict
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 
 from src.tools.activity_store import list_activities
@@ -96,6 +98,168 @@ def compute_weekly_trends(activities: list[dict]) -> list[dict]:
             "trimp": round(total_trimp),
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# Session-level plan matching
+# ---------------------------------------------------------------------------
+
+
+def match_plan_sessions(plan: dict, activities: list[dict]) -> dict:
+    """Match planned sessions to actual activities by date and sport.
+
+    Primary match: exact (date, sport) key lookup.
+    Fallback: adjacent days (+/- 1 day) for same sport.
+    Tracks used activities to prevent double-matching.
+
+    Returns:
+        {
+            "matched": [{"planned": ..., "actual": ..., "duration_delta_min": int,
+                         "intensity_match": str}, ...],
+            "missed": [{"planned": session, "date": plan_date}, ...],
+            "unplanned": [activity_dicts],
+            "compliance_rate": float,
+            "matched_count": int,
+            "planned_count": int,
+        }
+    """
+    # Index actual activities by (date_str, sport)
+    actual_by_date_sport: dict[tuple[str, str], list[dict]] = {}
+    for a in activities:
+        st = a.get("start_time", "")
+        if not st:
+            continue
+        date_str = datetime.fromisoformat(st).date().isoformat()
+        sport = a.get("sport", "unknown")
+        key = (date_str, sport)
+        actual_by_date_sport.setdefault(key, []).append(a)
+
+    matched = []
+    missed = []
+    used_activity_times: set[str] = set()
+
+    for session in plan.get("sessions", []):
+        plan_date = session.get("date", "")
+        plan_sport = session.get("sport", "unknown")
+
+        # Primary match: exact date + sport
+        candidates = _filter_unused(
+            actual_by_date_sport.get((plan_date, plan_sport), []),
+            used_activity_times,
+        )
+
+        # Fallback: check adjacent days (+/- 1 day) for same sport
+        if not candidates and plan_date:
+            try:
+                plan_dt = datetime.fromisoformat(plan_date).date()
+            except ValueError:
+                plan_dt = None
+            if plan_dt:
+                for delta in [timedelta(days=-1), timedelta(days=1)]:
+                    adj_date = (plan_dt + delta).isoformat()
+                    adj_key = (adj_date, plan_sport)
+                    candidates = _filter_unused(
+                        actual_by_date_sport.get(adj_key, []),
+                        used_activity_times,
+                    )
+                    if candidates:
+                        break
+
+        if candidates:
+            # Pick the first available candidate (activities are sorted by time)
+            actual = candidates[0]
+            used_activity_times.add(actual.get("start_time", ""))
+            matched.append(_build_match_result(session, actual))
+        else:
+            missed.append({"planned": session, "date": plan_date})
+
+    # Unplanned: actual activities not matched to any plan session
+    unplanned = [
+        a for a in activities
+        if a.get("start_time", "") not in used_activity_times
+    ]
+
+    planned_count = len(plan.get("sessions", []))
+    matched_count = len(matched)
+
+    return {
+        "matched": matched,
+        "missed": missed,
+        "unplanned": unplanned,
+        "compliance_rate": matched_count / planned_count if planned_count else 0,
+        "matched_count": matched_count,
+        "planned_count": planned_count,
+    }
+
+
+def _filter_unused(
+    candidates: list[dict],
+    used_times: set[str],
+) -> list[dict]:
+    """Filter out activities whose start_time is already used."""
+    return [a for a in candidates if a.get("start_time", "") not in used_times]
+
+
+def _build_match_result(session: dict, actual: dict) -> dict:
+    """Build a matched pair result with duration delta and intensity match."""
+    planned_dur = session.get("duration_minutes", 0)
+    actual_dur_sec = actual.get("duration_seconds", 0)
+    actual_dur_min = round(actual_dur_sec / 60)
+    duration_delta = actual_dur_min - planned_dur
+
+    # Intensity match
+    target_zone = _extract_zone_number(session.get("target_hr_zone", ""))
+    actual_zone = _get_dominant_zone(actual)
+
+    if target_zone is not None and actual_zone is not None:
+        if actual_zone == target_zone:
+            intensity_match = "on_target"
+        elif actual_zone < target_zone:
+            intensity_match = "lower_than_planned"
+        else:
+            intensity_match = "higher_than_planned"
+    else:
+        intensity_match = "unknown"
+
+    return {
+        "planned": session,
+        "actual": actual,
+        "duration_delta_min": duration_delta,
+        "intensity_match": intensity_match,
+    }
+
+
+def _get_dominant_zone(activity: dict) -> int | None:
+    """Find the HR zone (1-5) with the most seconds from zone_distribution.
+
+    Returns None if no zone data is available.
+    """
+    zones = activity.get("zone_distribution")
+    if not zones:
+        return None
+
+    best_zone = None
+    best_seconds = -1
+    for i in range(1, 6):
+        secs = zones.get(f"zone_{i}_seconds", 0)
+        if secs > best_seconds:
+            best_seconds = secs
+            best_zone = i
+
+    return best_zone if best_seconds > 0 else None
+
+
+def _extract_zone_number(target_hr_zone: str) -> int | None:
+    """Parse zone number from plan strings like 'Zone 2', 'Zone 2-3', 'Zone 4-5 (briefly)'.
+
+    Takes the first zone number found. Returns None if no zone data.
+    """
+    if not target_hr_zone:
+        return None
+    match = re.search(r"[Zz]one\s*(\d)", target_hr_zone)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 # ---------------------------------------------------------------------------
