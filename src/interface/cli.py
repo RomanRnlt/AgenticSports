@@ -25,6 +25,62 @@ console = Console()
 AVAILABLE_SPORTS = ["running", "cycling", "swimming", "gym"]
 
 
+def _format_targets(targets: dict) -> str:
+    """Format sport-specific targets as readable text.
+
+    Renders target keys with their appropriate units:
+      Running: "5:30-6:00/km" | Cycling: "180-200W" | Swimming: "1:45-1:55/100m"
+      General: "Zone 2" | "RPE 6-7"
+    """
+    if not targets:
+        return ""
+
+    parts = []
+    if "pace_min_km" in targets:
+        parts.append(f"{targets['pace_min_km']}/km")
+    if "power_watts" in targets:
+        parts.append(f"{targets['power_watts']}W")
+    if "pace_min_100m" in targets:
+        parts.append(f"{targets['pace_min_100m']}/100m")
+    if "cadence_rpm" in targets:
+        parts.append(f"{targets['cadence_rpm']}rpm")
+    if "hr_zone" in targets:
+        parts.append(targets["hr_zone"])
+    if "rpe" in targets:
+        parts.append(f"RPE {targets['rpe']}")
+
+    return " | ".join(parts)
+
+
+def _format_steps(steps: list[dict]) -> str:
+    """Format workout steps as readable lines for CLI display.
+
+    Regular steps: "Warmup 15:00 @ 6:00-6:30/km | Zone 2"
+    Repeat groups: "6x:" header with indented sub-steps.
+    """
+    lines = []
+    for step in steps:
+        step_type = step.get("type", "?")
+        duration = step.get("duration", "")
+        targets = step.get("targets", {})
+
+        if step_type == "repeat":
+            count = step.get("repeat_count", 1)
+            lines.append(f"{count}x:")
+            for sub in step.get("steps", []):
+                sub_type = sub.get("type", "?").title()
+                sub_dur = sub.get("duration", "")
+                sub_targets = _format_targets(sub.get("targets", {}))
+                target_str = f" @ {sub_targets}" if sub_targets else ""
+                lines.append(f"  {sub_type} {sub_dur}{target_str}")
+        else:
+            target_str = _format_targets(targets)
+            at_str = f" @ {target_str}" if target_str else ""
+            lines.append(f"{step_type.title()} {duration}{at_str}")
+
+    return "\n".join(lines)
+
+
 def onboard_athlete() -> dict:
     """Interactive CLI to collect athlete info and create a profile."""
     console.print(
@@ -83,13 +139,27 @@ def display_plan(plan: dict) -> None:
     table.add_column("Notes", width=25)
 
     for session in plan.get("sessions", []):
+        if session.get("steps"):
+            # New structured format: render steps in Description column
+            duration = session.get(
+                "total_duration_minutes",
+                session.get("duration_minutes", "?"),
+            )
+            description = _format_steps(session["steps"])
+            notes = session.get("notes", "")
+        else:
+            # Old flat format: keep existing behavior
+            duration = session.get("duration_minutes", "?")
+            description = session.get("description", "")
+            notes = session.get("notes", "")
+
         table.add_row(
             session.get("day", ""),
             session.get("sport", ""),
             session.get("type", ""),
-            f"{session.get('duration_minutes', '?')} min",
-            session.get("description", ""),
-            session.get("notes", ""),
+            f"{duration} min",
+            description,
+            notes,
         )
 
     console.print(table)
