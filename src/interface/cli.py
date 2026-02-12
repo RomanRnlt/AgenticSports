@@ -18,7 +18,7 @@ from src.memory.profile import create_profile, save_profile, load_profile
 from src.memory.user_model import UserModel
 from src.tools.fit_parser import parse_fit_file
 from src.tools.metrics import calculate_trimp, classify_hr_zone
-from src.tools.activity_store import store_activity, list_activities
+from src.tools.activity_store import store_activity, list_activities, import_new_activities
 
 console = Console()
 
@@ -142,9 +142,56 @@ def import_activity(file_path: str) -> None:
     console.print(f"\n[green]Activity stored: {stored_path}[/green]")
 
 
+def format_import_report(imported: list[dict]) -> str:
+    """Format a human-readable summary of imported activities.
+
+    Examples:
+        "Found 3 new activities: Running 8.2km, Cycling 45.0km, Strength 60min"
+        "Found 1 new activity: Swimming 1.5km"
+        "No new activities found."
+    """
+    if not imported:
+        return "No new activities found."
+
+    summaries = []
+    for act in imported:
+        sport = (act.get("sport") or "unknown").title()
+        distance = act.get("distance_meters")
+        duration_sec = act.get("duration_seconds")
+
+        if distance and distance > 0:
+            summaries.append(f"{sport} {distance / 1000:.1f}km")
+        elif duration_sec and duration_sec > 0:
+            summaries.append(f"{sport} {round(duration_sec / 60)}min")
+        else:
+            summaries.append(sport)
+
+    count = len(imported)
+    noun = "activity" if count == 1 else "activities"
+    return f"Found {count} new {noun}: {', '.join(summaries)}"
+
+
+def run_import() -> list[dict]:
+    """Run auto-import pipeline and display results.
+
+    Returns the list of newly imported activities.
+    """
+    imported = import_new_activities()
+    report = format_import_report(imported)
+
+    if imported:
+        console.print(Panel(report, title="Activity Import", style="green"))
+    else:
+        console.print(f"[dim]{report}[/dim]")
+
+    return imported
+
+
 def run_assessment() -> None:
     """Run a full assessment cycle: compare recent activities against current plan."""
     import json
+
+    run_import()
 
     try:
         profile = load_profile()
@@ -231,6 +278,8 @@ def _load_latest_plan() -> dict | None:
 
 def run_trajectory() -> None:
     """Show full trajectory assessment."""
+    run_import()
+
     try:
         profile = load_profile()
     except FileNotFoundError:
@@ -291,6 +340,8 @@ def run_trajectory() -> None:
 
 def run_status() -> None:
     """Quick status check with proactive messages."""
+    run_import()
+
     try:
         profile = load_profile()
     except FileNotFoundError:
@@ -335,6 +386,8 @@ def run_chat() -> None:
     """
     from src.agent.onboarding import OnboardingEngine
     from src.agent.conversation import ConversationEngine
+
+    run_import()
 
     user_model = UserModel.load_or_create()
     is_new_user = not user_model.structured_core.get("sports")
@@ -432,7 +485,7 @@ def main(args: list[str] | None = None):
     )
     parser.add_argument(
         "--import", dest="import_file", metavar="FILE",
-        help="Import a FIT file or JSON activity fixture",
+        help="Import a single FIT file or JSON activity fixture (for bulk import, auto-import runs on startup)",
     )
     parser.add_argument(
         "--assess", action="store_true",
