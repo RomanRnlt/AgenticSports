@@ -489,8 +489,9 @@ def run_chat() -> None:
                 )
                 profile = user_model.project_profile()
                 beliefs = user_model.get_active_beliefs(min_confidence=0.6)
+                activities = list_activities()
                 try:
-                    plan = generate_plan(profile, beliefs=beliefs)
+                    plan = generate_plan(profile, beliefs=beliefs, activities=activities)
                     path = save_plan(plan)
                     console.print(f"[green]Plan saved to {path}[/green]\n")
                     display_plan(plan)
@@ -594,8 +595,9 @@ def main(args: list[str] | None = None):
         # Legacy form-based onboarding
         profile = onboard_athlete()
         console.print("\n[yellow]Generating your training plan...[/yellow]\n")
+        activities = list_activities()
         try:
-            plan = generate_plan(profile)
+            plan = generate_plan(profile, activities=activities)
         except ValueError as e:
             console.print(f"[red]Error generating plan: {e}[/red]")
             return

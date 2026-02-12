@@ -87,7 +87,7 @@ class AgentCore:
         self.transition(AgentState.PLANNING)
         adjustments = assessment.get("recommended_adjustments", [])
         adjusted_plan = generate_adjusted_plan(
-            profile, plan, assessment, beliefs=beliefs,
+            profile, plan, assessment, beliefs=beliefs, activities=activities,
         )
         self.context["adjusted_plan"] = adjusted_plan
 
