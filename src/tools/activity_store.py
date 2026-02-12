@@ -234,7 +234,6 @@ def import_new_activities(
             else:
                 manifest[fit_file.name] = {
                     "status": "non_activity",
-                    "file_hash": file_hash(fit_file),
                     "imported_at": now,
                     "activity_path": None,
                 }

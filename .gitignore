@@ -26,6 +26,10 @@ uv.lock
 .ralph/.loop_start_sha
 .ralph/status.json
 
+# Generated data (reproducible from FIT files via auto-import)
+data/activities/*.json
+data/import_manifest.json
+
 # IDE
 .vscode/
 .idea/
