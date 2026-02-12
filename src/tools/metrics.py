@@ -73,6 +73,41 @@ def classify_hr_zone(
     return 5
 
 
+def calculate_zone_distribution(
+    hr_values: list[int],
+    rest_hr: int = DEFAULT_REST_HR,
+    max_hr: int = DEFAULT_MAX_HR,
+    sample_interval_seconds: float = 1.0,
+) -> dict:
+    """Compute time in each HR zone from record-level heart rate data.
+
+    This is the fallback for the ~5% of activity files that lack device-computed
+    time_in_zone data. Each HR value is classified into a zone (1-5), and the
+    count is multiplied by sample_interval_seconds to get seconds in each zone.
+
+    Args:
+        hr_values: List of heart rate values (one per sample).
+        rest_hr: Resting heart rate for zone calculation.
+        max_hr: Maximum heart rate for zone calculation.
+        sample_interval_seconds: Time between samples (typically 1.0s for FIT records).
+
+    Returns:
+        Dict with zone_1_seconds through zone_5_seconds.
+    """
+    distribution = {f"zone_{i}_seconds": 0.0 for i in range(1, 6)}
+
+    if not hr_values:
+        return distribution
+
+    zones = calculate_hr_zones(rest_hr, max_hr)
+
+    for hr in hr_values:
+        zone = classify_hr_zone(hr, rest_hr, max_hr)
+        distribution[f"zone_{zone}_seconds"] += sample_interval_seconds
+
+    return distribution
+
+
 def calculate_pace_zones(threshold_pace_min_km: float) -> dict:
     """Calculate pace zones based on threshold (lactate threshold) pace.
 
