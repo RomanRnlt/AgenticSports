@@ -17,6 +17,7 @@ def generate_plan(
     profile: dict,
     beliefs: list[dict] | None = None,
     activities: list[dict] | None = None,
+    relevant_episodes: list[dict] | None = None,
 ) -> dict:
     """Send athlete profile to Gemini and return a structured training plan.
 
@@ -26,12 +27,16 @@ def generate_plan(
         activities: Optional activity list for data-derived target generation.
                     When provided, per-sport performance data is injected into
                     the prompt so the LLM can set athlete-specific targets.
+        relevant_episodes: Past episode reflections to inform planning.
 
     Raises ValueError if the response is not valid JSON.
     Raises google.genai errors on API failure.
     """
     client = get_client()
-    user_prompt = build_plan_prompt(profile, beliefs=beliefs, activities=activities)
+    user_prompt = build_plan_prompt(
+        profile, beliefs=beliefs, activities=activities,
+        relevant_episodes=relevant_episodes,
+    )
 
     response = client.models.generate_content(
         model=MODEL,

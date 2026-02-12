@@ -167,6 +167,7 @@ def build_plan_prompt(
     profile: dict,
     beliefs: list[dict] | None = None,
     activities: list[dict] | None = None,
+    relevant_episodes: list[dict] | None = None,
 ) -> str:
     """Build the user prompt for training plan generation from an athlete profile.
 
@@ -177,6 +178,7 @@ def build_plan_prompt(
         activities: Optional list of activity dicts for data-derived target
                     generation. When provided, build_planning_context() is called
                     and the result injected between fitness and constraints sections.
+        relevant_episodes: Past episode reflections with lessons and patterns.
     """
     goal = profile.get("goal", {})
     constraints = profile.get("constraints", {})
@@ -204,6 +206,19 @@ def build_plan_prompt(
 
     beliefs_section = _format_beliefs_section(beliefs)
 
+    # Format episodes section (inline to avoid circular import with planner.py)
+    episodes_section = ""
+    if relevant_episodes:
+        ep_lines = ["LESSONS FROM PAST TRAINING BLOCKS:"]
+        for ep in relevant_episodes:
+            block = ep.get("block", "?")
+            ep_lines.append(f"\n  [{block}]")
+            for lesson in ep.get("lessons", []):
+                ep_lines.append(f"  - {lesson}")
+            for pattern in ep.get("patterns_detected", []):
+                ep_lines.append(f"  - Pattern: {pattern}")
+        episodes_section = "\n".join(ep_lines) + "\n"
+
     return f"""\
 Create a 1-week training plan for this athlete:
 
@@ -218,7 +233,7 @@ Fitness level:
 - Training days per week: {constraints.get('training_days_per_week', 5)}
 - Max session duration: {constraints.get('max_session_minutes', 90)} minutes
 - Available sports: {', '.join(constraints.get('available_sports', sports))}
-{beliefs_section}
+{episodes_section}{beliefs_section}
 TODAY'S DATE: {date.today().isoformat()} ({date.today().strftime('%A')})
 Generate the plan starting from the next Monday after today.
 """

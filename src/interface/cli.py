@@ -490,8 +490,18 @@ def run_chat() -> None:
                 profile = user_model.project_profile()
                 beliefs = user_model.get_active_beliefs(min_confidence=0.6)
                 activities = list_activities()
+                from src.memory.episodes import retrieve_relevant_episodes
+                _episodes = list_episodes(limit=10)
+                _relevant_eps = retrieve_relevant_episodes(
+                    {"goal": profile.get("goal", {}), "sports": profile.get("sports", [])},
+                    _episodes,
+                    max_results=5,
+                )
                 try:
-                    plan = generate_plan(profile, beliefs=beliefs, activities=activities)
+                    plan = generate_plan(
+                        profile, beliefs=beliefs, activities=activities,
+                        relevant_episodes=_relevant_eps,
+                    )
                     path = save_plan(plan)
                     console.print(f"[green]Plan saved to {path}[/green]\n")
                     display_plan(plan)
@@ -614,8 +624,15 @@ def main(args: list[str] | None = None):
         profile = onboard_athlete()
         console.print("\n[yellow]Generating your training plan...[/yellow]\n")
         activities = list_activities()
+        from src.memory.episodes import retrieve_relevant_episodes
+        _episodes = list_episodes(limit=10)
+        _relevant_eps = retrieve_relevant_episodes(
+            {"goal": profile.get("goal", {}), "sports": profile.get("sports", [])},
+            _episodes,
+            max_results=5,
+        )
         try:
-            plan = generate_plan(profile, activities=activities)
+            plan = generate_plan(profile, activities=activities, relevant_episodes=_relevant_eps)
         except ValueError as e:
             console.print(f"[red]Error generating plan: {e}[/red]")
             return

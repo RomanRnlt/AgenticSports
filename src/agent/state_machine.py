@@ -83,11 +83,22 @@ class AgentCore:
         )
         self.context["assessment"] = assessment
 
+        # Load relevant past episodes for planning context
+        from src.memory.episodes import list_episodes, retrieve_relevant_episodes
+        episodes = list_episodes(limit=10)
+        relevant_episodes = retrieve_relevant_episodes(
+            {"goal": profile.get("goal", {}), "sports": profile.get("sports", [])},
+            episodes,
+            max_results=5,
+        )
+
         # PLANNING: generate adjusted plan
         self.transition(AgentState.PLANNING)
         adjustments = assessment.get("recommended_adjustments", [])
         adjusted_plan = generate_adjusted_plan(
-            profile, plan, assessment, beliefs=beliefs, activities=activities,
+            profile, plan, assessment,
+            relevant_episodes=relevant_episodes,
+            beliefs=beliefs, activities=activities,
         )
         self.context["adjusted_plan"] = adjusted_plan
 
@@ -98,6 +109,10 @@ class AgentCore:
 
         # EXECUTING: save the plan (caller handles persistence)
         self.transition(AgentState.EXECUTING)
+
+        # REFLECTING: record that this cycle considered past reflections
+        self.transition(AgentState.REFLECTING)
+        self.context["episodes_considered"] = len(relevant_episodes)
 
         self.transition(AgentState.IDLE)
 
