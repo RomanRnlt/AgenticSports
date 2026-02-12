@@ -27,6 +27,7 @@ def generate_adjusted_plan(
     assessment: dict,
     relevant_episodes: list[dict] | None = None,
     beliefs: list[dict] | None = None,
+    activities: list[dict] | None = None,
 ) -> dict:
     """Generate an adjusted 1-week plan based on assessment results.
 
@@ -37,13 +38,17 @@ def generate_adjusted_plan(
         relevant_episodes: Past episode reflections to inform planning
         beliefs: Optional list of active beliefs (>= 0.6 confidence) to inject
                  into the adjustment prompt for personalization.
+        activities: Optional activity list for data-derived target generation.
+                    When provided, per-sport performance data is injected into
+                    the prompt so the LLM can set athlete-specific targets.
 
     Returns:
         New plan dict with adjustments_applied field
     """
     client = get_client()
     prompt = _build_adjusted_plan_prompt(
-        profile, previous_plan, assessment, relevant_episodes, beliefs=beliefs
+        profile, previous_plan, assessment, relevant_episodes,
+        beliefs=beliefs, activities=activities,
     )
 
     response = client.models.generate_content(
@@ -70,6 +75,7 @@ def _build_adjusted_plan_prompt(
     assessment: dict,
     relevant_episodes: list[dict] | None = None,
     beliefs: list[dict] | None = None,
+    activities: list[dict] | None = None,
 ) -> str:
     """Build prompt for adjusted plan generation."""
     from src.agent.prompts import _format_beliefs_section
@@ -102,6 +108,15 @@ def _build_adjusted_plan_prompt(
     if not fitness_info:
         fitness_info = "- No fitness data available (assume beginner/unknown level)\n"
 
+    # Activity data injection for data-derived targets
+    activity_section = ""
+    if activities:
+        from src.tools.activity_context import build_planning_context
+
+        planning_ctx = build_planning_context(activities)
+        if planning_ctx:
+            activity_section = f"\n{planning_ctx}\n"
+
     beliefs_section = _format_beliefs_section(beliefs)
 
     return f"""\
@@ -114,7 +129,7 @@ Target time: {goal.get('target_time', 'Not set')}
 
 Fitness:
 {fitness_info}
-Constraints:
+{activity_section}Constraints:
 - Training days: {constraints.get('training_days_per_week', 5)}/week
 - Max session: {constraints.get('max_session_minutes', 90)} minutes
 
