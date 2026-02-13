@@ -106,8 +106,13 @@ GROUNDING RULES:
 - For simple sessions (easy run, long run), steps can be minimal: a single work step with targets is acceptable. Do not force warmup/cooldown on every session.
 - If no performance data is provided, use the athlete's profile fitness estimates (VO2max, threshold pace) to set reasonable targets.
 
+CRITICAL: You MUST respect the athlete's stated sport distribution from the SPORT DISTRIBUTION
+section below (if present). If the athlete wants 3 running and 2 cycling sessions, include exactly
+those counts. Do NOT redistribute sessions across sports based on your own judgment — follow the
+athlete's stated preferences.
+
 Rules for the sessions array:
-- The athlete's training_days_per_week is a guideline. If their stated sport distribution requires more sessions, include them. Use the COACH'S NOTES to determine the actual number and type of sessions.
+- The athlete's training_days_per_week is a guideline. If their stated sport distribution requires more sessions, include them. Use the COACH'S NOTES and SPORT DISTRIBUTION to determine the actual number and type of sessions.
 - Duration: max_session_minutes is the GENERAL limit. Check COACH'S NOTES for weekday vs weekend differences and adjust session durations accordingly.
 - Include a mix of session types appropriate for the athlete's goal event
 - Sessions should be spread across the week (Monday through Sunday)
@@ -206,6 +211,17 @@ def build_plan_prompt(
 
     beliefs_section = _format_beliefs_section(beliefs)
 
+    # Extract scheduling beliefs for prominent sport distribution section
+    sport_distribution_section = ""
+    if beliefs:
+        scheduling = [b for b in beliefs if b.get("category") == "scheduling"]
+        if scheduling:
+            lines = ["Sport distribution (from athlete's stated preferences):"]
+            for b in scheduling:
+                conf = b.get("confidence", 0.7)
+                lines.append(f"- {b.get('text', '?')} (confidence: {conf:.2f})")
+            sport_distribution_section = "\n".join(lines) + "\n"
+
     # Format episodes section (inline to avoid circular import with planner.py)
     episodes_section = ""
     if relevant_episodes:
@@ -227,7 +243,7 @@ Goal event: {goal.get('event', 'General fitness')}
 Target date: {goal.get('target_date', 'Not set')}
 Target time: {goal.get('target_time', 'Not set')}
 
-Fitness level:
+{sport_distribution_section}Fitness level:
 {fitness_info}
 {activity_section}Constraints:
 - Training days per week: {constraints.get('training_days_per_week', 5)}

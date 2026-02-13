@@ -32,9 +32,336 @@ ROLLING_SUMMARY_INTERVAL = 5
 # Number of recent turns to keep verbatim
 RECENT_TURNS_COUNT = 10
 
+# JSON response schema for Gemini structured output — forces consistent field names.
+CONVERSATION_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "response_text": {"type": "STRING"},
+        "extracted_beliefs": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "text": {"type": "STRING"},
+                    "category": {"type": "STRING"},
+                    "confidence": {"type": "NUMBER"},
+                    "reasoning": {"type": "STRING"},
+                },
+                "required": ["text", "category", "confidence"],
+            },
+        },
+        "structured_core_updates": {
+            "type": "OBJECT",
+            "properties": {
+                "name": {"type": "STRING", "nullable": True},
+                "sports": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"},
+                    "nullable": True,
+                },
+                "goal": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "event": {"type": "STRING", "nullable": True},
+                        "target_date": {"type": "STRING", "nullable": True},
+                        "target_time": {"type": "STRING", "nullable": True},
+                    },
+                    "nullable": True,
+                },
+                "fitness": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "estimated_vo2max": {"type": "NUMBER", "nullable": True},
+                        "threshold_pace_min_km": {"type": "STRING", "nullable": True},
+                        "weekly_volume_km": {"type": "NUMBER", "nullable": True},
+                    },
+                    "nullable": True,
+                },
+                "constraints": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "training_days_per_week": {"type": "INTEGER", "nullable": True},
+                        "max_session_minutes": {
+                            "type": "INTEGER",
+                            "nullable": True,
+                            "description": "MAXIMUM session duration in minutes across the entire week INCLUDING weekends. If weekday=90min, weekend=3h, set to 180.",
+                        },
+                    },
+                    "nullable": True,
+                },
+            },
+        },
+        "trigger_cycle": {"type": "BOOLEAN"},
+        "cycle_reason": {"type": "STRING", "nullable": True},
+        "onboarding_complete": {"type": "BOOLEAN"},
+    },
+    "required": [
+        "response_text", "extracted_beliefs", "structured_core_updates",
+        "trigger_cycle", "onboarding_complete",
+    ],
+}
+
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _normalize_llm_response(raw: dict) -> dict:
+    """Normalize LLM JSON response to canonical key names.
+
+    Gemini returns varying key names and structures depending on the prompt.
+    This maps all known variants to the expected schema:
+      response_text, extracted_beliefs, structured_core_updates,
+      trigger_cycle, cycle_reason, onboarding_complete
+    """
+    result: dict = {}
+
+    # --- response_text ---
+    result["response_text"] = (
+        raw.get("response_text")
+        or raw.get("response")
+        or raw.get("structured_coach_response")
+        or raw.get("natural_language_response")
+        or raw.get("coach_response")
+        or raw.get("coaching_response")
+        or raw.get("text")
+        or "I'm here to help with your training."
+    )
+
+    # --- extracted_beliefs ---
+    beliefs = raw.get("extracted_beliefs")
+    if beliefs is None:
+        beliefs = raw.get("athlete_beliefs") or raw.get("beliefs") or []
+        if not beliefs:
+            scu = raw.get("structured_core_updates", {})
+            if isinstance(scu, dict):
+                beliefs = scu.pop("athlete_beliefs", None) or scu.pop("beliefs", None) or []
+
+    normalized_beliefs = _normalize_beliefs(beliefs if isinstance(beliefs, list) else [])
+
+    # --- structured_core_updates ---
+    scu = raw.get("structured_core_updates", {})
+    if isinstance(scu, dict):
+        scu.pop("athlete_beliefs", None)
+        scu.pop("beliefs", None)
+        scu.pop("training_cycle_trigger", None)
+    else:
+        scu = {}
+
+    # Extract synthetic beliefs from activity_preferences / training_preferences
+    for prefs_key in ("activity_preferences", "training_preferences"):
+        prefs = scu.pop(prefs_key, None)
+        if isinstance(prefs, dict):
+            synth_beliefs, extra_core = _extract_activity_preference_data(prefs)
+            normalized_beliefs.extend(synth_beliefs)
+            scu.update(extra_core)
+
+    result["extracted_beliefs"] = normalized_beliefs
+    result["structured_core_updates"] = _flatten_core_updates(scu)
+
+    # --- trigger_cycle ---
+    tc = raw.get("trigger_cycle")
+    if tc is None:
+        tct = raw.get("training_cycle_trigger", {})
+        if isinstance(tct, dict):
+            tc = tct.get("trigger", False)
+        else:
+            tc = bool(tct)
+    result["trigger_cycle"] = bool(tc)
+
+    # --- cycle_reason ---
+    reason = raw.get("cycle_reason")
+    if reason is None:
+        tct = raw.get("training_cycle_trigger", {})
+        if isinstance(tct, dict):
+            reason = tct.get("reason")
+    result["cycle_reason"] = reason
+
+    # --- onboarding_complete ---
+    oc = raw.get("onboarding_complete")
+    if oc is None:
+        oc = raw.get("onboarding_status", {})
+        if isinstance(oc, dict):
+            oc = oc.get("complete", False)
+    result["onboarding_complete"] = bool(oc) if oc is not None else False
+
+    return result
+
+
+def _normalize_beliefs(beliefs: list) -> list[dict]:
+    """Normalize a list of belief dicts to canonical format."""
+    normalized = []
+    for b in beliefs:
+        text = b.get("text") or b.get("belief") or b.get("value") or b.get("statement", "")
+        if isinstance(text, (list, tuple)):
+            text = ", ".join(str(x) for x in text)
+        elif not isinstance(text, str):
+            text = str(text) if text else ""
+        if text:
+            normalized.append({
+                "text": text,
+                "category": b.get("category", "preference"),
+                "confidence": b.get("confidence", 0.7),
+                "reasoning": b.get("reasoning") or b.get("reason", ""),
+            })
+    return normalized
+
+
+def _extract_activity_preference_data(prefs: dict) -> tuple[list[dict], dict]:
+    """Extract beliefs and core updates from Gemini's activity_preferences section.
+
+    Gemini often returns an activity_preferences dict instead of proper beliefs:
+      {"preferred_sports": [...], "preferred_run_sessions_per_week": 3,
+       "has_zwift_access": true, ...}
+
+    Returns (synthetic_beliefs, extra_core_updates).
+    """
+    beliefs: list[dict] = []
+    core: dict = {}
+
+    # preferred_sports → top-level sports
+    sports = prefs.get("preferred_sports")
+    if isinstance(sports, list) and sports:
+        core["sports"] = sports
+
+    # Sum up session counts → constraints.training_days_per_week
+    session_keys = [k for k in prefs if "sessions_per_week" in k and k != "max_sessions_per_week"]
+    total_sessions = 0
+    for k in session_keys:
+        v = prefs.get(k)
+        if isinstance(v, (int, float)):
+            total_sessions += int(v)
+            sport = k.replace("preferred_", "").replace("_sessions_per_week", "").replace("_", " ")
+            beliefs.append({
+                "text": f"Wants {int(v)}x {sport} per week",
+                "category": "scheduling",
+                "confidence": 0.85,
+                "reasoning": "Extracted from stated training plan",
+            })
+
+    # Use max_sessions_per_week if provided, else sum of individual counts
+    max_sessions = prefs.get("max_sessions_per_week")
+    if isinstance(max_sessions, (int, float)):
+        core["constraints"] = {"training_days_per_week": min(int(max_sessions), 7)}
+    elif total_sessions > 0:
+        core["constraints"] = {"training_days_per_week": min(total_sessions, 7)}
+
+    # Generic boolean preferences → beliefs (e.g., has_zwift_access, has_indoor_trainer)
+    for key, value in prefs.items():
+        if isinstance(value, bool) and value and key.startswith("has_"):
+            label = key.replace("has_", "").replace("_", " ")
+            beliefs.append({
+                "text": f"Has {label}",
+                "category": "preference",
+                "confidence": 0.9,
+                "reasoning": f"Extracted from {key}",
+            })
+
+    return beliefs, core
+
+
+def _normalize_pace(pace_str: str) -> str:
+    """Normalize pace format to MM:SS.
+
+    Gemini may return "0:04:16" or "00:04:16" (H:MM:SS) instead of "04:16" (MM:SS).
+    """
+    if not isinstance(pace_str, str):
+        return str(pace_str)
+    parts = pace_str.split(":")
+    if len(parts) == 3 and parts[0] in ("0", "00"):
+        return f"{parts[1]}:{parts[2]}"
+    return pace_str
+
+
+
+
+# Mapping of Gemini's non-standard field names to canonical dot-notation paths.
+_CORE_FIELD_ALIASES: dict[str, str] = {
+    # goal fields — generic nested→dot mappings
+    "goal.event": "goal.event",
+    "goals.event": "goal.event",
+    "event": "goal.event",
+    "goal_event": "goal.event",
+    "goals.primary_race_target": "goal.event",
+    "primary_race_target": "goal.event",
+    "motivation.race_goal": "goal.event",
+    "motivation.event": "goal.event",
+    "goal.target_date": "goal.target_date",
+    "goals.target_date": "goal.target_date",
+    "target_date": "goal.target_date",
+    "motivation.target_race_date": "goal.target_date",
+    "motivation.target_date": "goal.target_date",
+    "goal.target_time": "goal.target_time",
+    "goals.target_time": "goal.target_time",
+    "goals.target_performance": "goal.target_time",
+    "target_time": "goal.target_time",
+    "target_performance": "goal.target_time",
+    "motivation.race_target_time": "goal.target_time",
+    "motivation.target_time": "goal.target_time",
+    "goal.goal_type": "goal.goal_type",
+    "goals.goal_type": "goal.goal_type",
+    "goal_type": "goal.goal_type",
+    # fitness fields
+    "fitness.estimated_vo2max": "fitness.estimated_vo2max",
+    "estimated_vo2max": "fitness.estimated_vo2max",
+    "fitness.threshold_pace_min_km": "fitness.threshold_pace_min_km",
+    "threshold_pace_min_km": "fitness.threshold_pace_min_km",
+    "fitness.weekly_volume_km": "fitness.weekly_volume_km",
+    "weekly_volume_km": "fitness.weekly_volume_km",
+    "fitness.resting_hr": "fitness.resting_hr",
+    "resting_hr": "fitness.resting_hr",
+    "fitness.max_hr": "fitness.max_hr",
+    "max_hr": "fitness.max_hr",
+    "fitness.ftp": "fitness.ftp",
+    "ftp": "fitness.ftp",
+    # constraint fields
+    "constraints.training_days_per_week": "constraints.training_days_per_week",
+    "training_days_per_week": "constraints.training_days_per_week",
+    "constraints.max_session_minutes": "constraints.max_session_minutes",
+    "max_session_minutes": "constraints.max_session_minutes",
+    "constraints.available_sports": "constraints.available_sports",
+    "available_sports": "constraints.available_sports",
+    "constraints.max_weekday_minutes": "constraints.max_weekday_minutes",
+    "max_weekday_minutes": "constraints.max_weekday_minutes",
+    "constraints.max_weekend_minutes": "constraints.max_weekend_minutes",
+    "max_weekend_minutes": "constraints.max_weekend_minutes",
+    # top-level fields
+    "sports": "sports",
+    "preferred_sports": "sports",
+    "name": "name",
+    "athlete_name": "name",
+}
+
+
+def _flatten_core_updates(scu: dict) -> dict:
+    """Flatten nested structured_core_updates into dot-notation paths.
+
+    Recursively flattens nested dicts and maps non-standard field names
+    to canonical paths via _CORE_FIELD_ALIASES.
+    """
+    flat: dict = {}
+
+    for key, value in scu.items():
+        if isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                dotted = f"{key}.{sub_key}"
+                canonical = _CORE_FIELD_ALIASES.get(dotted) or _CORE_FIELD_ALIASES.get(sub_key)
+                if canonical:
+                    if "pace" in canonical and isinstance(sub_value, str):
+                        sub_value = _normalize_pace(sub_value)
+                    flat[canonical] = sub_value
+                else:
+                    flat[dotted] = sub_value
+        else:
+            canonical = _CORE_FIELD_ALIASES.get(key)
+            if canonical:
+                if "pace" in canonical and isinstance(value, str):
+                    value = _normalize_pace(value)
+                flat[canonical] = value
+            else:
+                flat[key] = value
+
+    return flat
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -376,12 +703,15 @@ class ConversationEngine:
                     TOKEN_BUDGETS[phase]["system"],
                 ),
                 temperature=0.7,
+                response_mime_type="application/json",
+                response_schema=CONVERSATION_RESPONSE_SCHEMA,
             ),
         )
 
         # 3. Parse structured response
         try:
-            result = extract_json(response.text)
+            raw_json = extract_json(response.text)
+            result = _normalize_llm_response(raw_json)
         except ValueError:
             # Fallback: treat entire response as text
             result = {
@@ -623,6 +953,7 @@ class ConversationEngine:
                 config=genai.types.GenerateContentConfig(
                     system_instruction=BELIEF_MERGE_PROMPT,
                     temperature=0.2,
+                    response_mime_type="application/json",
                 ),
             )
             return extract_json(response.text)
@@ -785,6 +1116,7 @@ class ConversationEngine:
             config=genai.types.GenerateContentConfig(
                 system_instruction=SESSION_SUMMARY_PROMPT,
                 temperature=0.3,
+                response_mime_type="application/json",
             ),
         )
 

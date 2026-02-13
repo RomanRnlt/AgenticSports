@@ -4,56 +4,59 @@ These criteria define what "excellent" looks like. Each criterion is a function
 that takes test results and returns (passed: bool, detail: str).
 """
 
+import re
 from datetime import date, datetime
 
 
 def plan_respects_sport_distribution(plan: dict, beliefs: list[dict]) -> tuple[bool, str]:
     """Plan must include sessions matching the user's stated sport distribution.
 
-    If user said "3x running, 1x swimming, 2-3x cycling, gym",
-    the plan must reflect this, not a generic split.
+    Generically parses scheduling beliefs for patterns like "Wants Nx <sport> per week"
+    and compares against actual plan session counts. No hardcoded sport names.
     """
     sessions = plan.get("sessions", [])
-    sports_in_plan = {}
+    sports_in_plan: dict[str, int] = {}
     for s in sessions:
-        sport = s.get("sport", "unknown").lower()
+        sport = s.get("sport", "unknown").lower().replace(" ", "_")
         sports_in_plan[sport] = sports_in_plan.get(sport, 0) + 1
-
-    # Check if beliefs mention specific session counts
-    distribution_beliefs = [
-        b for b in beliefs
-        if any(kw in b.get("text", "").lower() for kw in ["session", "mal", "times", "per week"])
-    ]
 
     issues = []
 
-    # Must have at least 2 different sports IF user trains multi-sport (check beliefs)
-    sport_count = len([s for s in sports_in_plan if s not in ("rest", "recovery", "general fitness")])
-    multi_sport_indicators = [
-        b for b in beliefs
-        if any(kw in b.get("text", "").lower() for kw in ["cycling", "swimming", "swim", "rad", "bike", "triathlon"])
-    ]
-    if multi_sport_indicators and sport_count < 2:
-        issues.append(f"Only {sport_count} sport types in plan, expected multi-sport")
+    # Extract expected sport counts from scheduling beliefs
+    # Matches patterns like "Wants 3x running per week", "Wants 2-3x cycling per week"
+    expected_counts: dict[str, tuple[int, int]] = {}  # sport -> (min_count, max_count)
+    scheduling_beliefs = [b for b in beliefs if b.get("category") == "scheduling"]
+    for b in scheduling_beliefs:
+        text = b.get("text", "")
+        # Match "Wants Nx sport" or "Wants N-Mx sport"
+        m = re.search(r"[Ww]ants?\s+(\d+)(?:\s*-\s*(\d+))?x?\s+(.+?)(?:\s+per\s+week|\s+sessions?|\s*$)", text)
+        if m:
+            min_count = int(m.group(1))
+            max_count = int(m.group(2)) if m.group(2) else min_count
+            sport_name = m.group(3).strip().lower().replace(" ", "_")
+            expected_counts[sport_name] = (min_count, max_count)
 
-    # If user mentioned cycling/ZWIFT, must have cycling sessions
-    # Count all cycling variants (cycling, indoor_cycling, road_cycling, zwift, etc.)
-    cycling_count = sum(v for k, v in sports_in_plan.items() if "cycling" in k or "bike" in k or "zwift" in k or "rad" in k)
-    cycling_beliefs = [b for b in beliefs if "cycling" in b.get("text", "").lower() or "zwift" in b.get("text", "").lower()]
-    if cycling_beliefs and cycling_count < 2:
-        issues.append(f"Only {cycling_count} cycling sessions but user wants 2-3")
+    # Compare expected vs actual for each expected sport
+    for sport, (min_c, max_c) in expected_counts.items():
+        # Find matching sport in plan (flexible matching: "run" matches "running", etc.)
+        actual = 0
+        for plan_sport, count in sports_in_plan.items():
+            if sport in plan_sport or plan_sport in sport or plan_sport.startswith(sport[:3]):
+                actual += count
+        if actual < min_c:
+            issues.append(f"Expected {min_c}-{max_c}x {sport} but got {actual}")
 
-    # If user mentioned swimming, must have swimming
-    swim_beliefs = [b for b in beliefs if "swim" in b.get("text", "").lower()]
-    if swim_beliefs and sports_in_plan.get("swimming", 0) < 1:
-        issues.append(f"No swimming sessions but user swims weekly")
-
-    # If user mentioned gym, must have gym/strength sessions
-    # Count all gym/strength variants (gym, strength, strength_training, weight_training, etc.)
-    gym_count = sum(v for k, v in sports_in_plan.items() if "gym" in k or "strength" in k or "weight" in k or "krafttraining" in k)
-    gym_beliefs = [b for b in beliefs if "gym" in b.get("text", "").lower() or "strength" in b.get("text", "").lower() or "muscle" in b.get("text", "").lower()]
-    if gym_beliefs and gym_count < 1:
-        issues.append(f"No gym/strength sessions but user goes to gym")
+    # If no scheduling beliefs parsed, fall back to checking multi-sport coverage
+    if not expected_counts:
+        sport_mentions: set[str] = set()
+        for b in beliefs:
+            text = b.get("text", "").lower()
+            # Look for any belief mentioning a sport with session counts
+            if any(kw in text for kw in ["session", "mal", "times", "per week"]):
+                sport_mentions.add("multi")
+        real_sports = [s for s in sports_in_plan if s not in ("rest", "recovery", "general_fitness")]
+        if sport_mentions and len(real_sports) < 2:
+            issues.append(f"Only {len(real_sports)} sport types in plan, expected multi-sport")
 
     passed = len(issues) == 0
     detail = f"Sports: {sports_in_plan}" + (f" | Issues: {'; '.join(issues)}" if issues else " | OK")
@@ -205,7 +208,8 @@ def structured_core_constraints_realistic(structured_core: dict) -> tuple[bool, 
 def plan_has_specific_targets(plan: dict) -> tuple[bool, str]:
     """Each session should have meaningful targets (pace, HR zone, or description).
 
-    Not just "Easy Run" but specific guidance.
+    Checks both session-level fields (legacy flat format) and inside
+    steps[].targets / steps[].steps[].targets (structured workout format).
     """
     sessions = plan.get("sessions", [])
     vague_sessions = []
@@ -213,7 +217,21 @@ def plan_has_specific_targets(plan: dict) -> tuple[bool, str]:
     for s in sessions:
         has_pace = bool(s.get("target_pace_min_km"))
         has_hr = bool(s.get("target_hr_zone"))
-        desc_len = len(s.get("description", ""))
+        # Also check inside steps for targets
+        for step in s.get("steps", []):
+            targets = step.get("targets", {})
+            if targets.get("pace_min_km") or targets.get("power_watts") or targets.get("pace_min_100m"):
+                has_pace = True
+            if targets.get("hr_zone"):
+                has_hr = True
+            # Check inside repeat steps too
+            for sub in step.get("steps", []):
+                sub_targets = sub.get("targets", {})
+                if sub_targets.get("pace_min_km") or sub_targets.get("power_watts") or sub_targets.get("pace_min_100m"):
+                    has_pace = True
+                if sub_targets.get("hr_zone"):
+                    has_hr = True
+        desc_len = len(s.get("description", "")) + len(s.get("notes", ""))
 
         if not has_pace and not has_hr and desc_len < 50:
             vague_sessions.append(s.get("day", "?"))
