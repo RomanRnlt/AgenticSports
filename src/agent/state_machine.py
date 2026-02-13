@@ -1,4 +1,18 @@
-"""Agent state machine: the core cognitive loop for ReAgt."""
+"""Agent state machine: the core cognitive loop for ReAgt.
+
+v2.0 Architecture (Priority 2+3):
+    Replaced the v1.0 fixed pipeline (PERCEIVE→REASON→PLAN→PROPOSE→EXECUTE→REFLECT)
+    with dynamic action selection. The agent now decides what to do at each step
+    using LLM-based action selection from the Action Space (src/agent/actions.py).
+
+    The cycle runs as: PERCEIVE → (SELECT → EXECUTE → OBSERVE)* → IDLE
+    where * means the inner loop repeats until the agent selects 'respond'
+    or hits the max iteration limit.
+
+    This resolves audit findings:
+    - #1 (linear pipeline → cognitive loop with decisions)
+    - #2 (no action space → dynamic tool selection)
+"""
 
 from enum import Enum
 from datetime import datetime
@@ -7,15 +21,26 @@ from datetime import datetime
 class AgentState(Enum):
     IDLE = "idle"
     PERCEIVING = "perceiving"
+    SELECTING = "selecting"      # NEW: agent choosing next action
+    EXECUTING = "executing"
+    OBSERVING = "observing"      # NEW: evaluating action result
+    # Legacy states kept for backwards compatibility in tests
     REASONING = "reasoning"
     PLANNING = "planning"
     PROPOSING = "proposing"
-    EXECUTING = "executing"
     REFLECTING = "reflecting"
 
 
+# Maximum actions per cycle to prevent runaway loops
+MAX_ACTIONS_PER_CYCLE = 6
+
+
 class AgentCore:
-    """Orchestrates the agent cognitive cycle: perceive -> reason -> plan -> propose -> execute."""
+    """Orchestrates the agent cognitive cycle with dynamic action selection.
+
+    v2.0: The agent DECIDES what to do at each step instead of following
+    a fixed sequence. Uses LLM-based action selection from the Action Space.
+    """
 
     def __init__(self):
         self.state = AgentState.IDLE
@@ -38,27 +63,30 @@ class AgentCore:
         user_model: "object | None" = None,
         conversation_context: str | None = None,
     ) -> dict:
-        """Execute one full cognitive cycle.
+        """Execute one cognitive cycle with dynamic action selection.
+
+        The agent perceives the context, then iteratively selects and executes
+        actions until it decides no more actions are needed (selects 'respond')
+        or hits the iteration limit.
 
         Args:
             profile: Athlete profile dict
             plan: Current training plan dict
             activities: List of activity dicts (actual training data)
-            user_model: Optional UserModel instance. When provided, active beliefs
-                        are injected into assessment and planning prompts.
-            conversation_context: Optional recent conversation text for subjective
-                                  context (e.g. "I've been sleeping badly").
+            user_model: Optional UserModel instance for belief injection
+            conversation_context: Optional recent conversation text
 
         Returns:
-            dict with assessment, adjustments, and updated plan
+            dict with assessment, adjusted_plan, autonomy_result, cycle_context
+            (backwards-compatible with v1.0 callers)
         """
-        from src.agent.assessment import assess_training
-        from src.agent.planner import generate_adjusted_plan
-        from src.agent.autonomy import classify_and_apply
+        from src.agent.actions import select_action, execute_action
 
         self.context = {
             "cycle_started": datetime.now().isoformat(timespec="seconds"),
             "state_history": [],
+            "actions_selected": [],
+            "action_results": [],
         }
 
         # Extract beliefs from user model if available
@@ -66,59 +94,68 @@ class AgentCore:
         if user_model is not None:
             beliefs = user_model.get_active_beliefs(min_confidence=0.6)
 
-        # PERCEIVING: activities already parsed and passed in
+        # ── PERCEIVE: load all available context ──────────────────
         self.transition(AgentState.PERCEIVING)
+        action_ctx = {
+            "profile": profile,
+            "plan": plan,
+            "activities": activities,
+            "beliefs": beliefs,
+            "user_model": user_model,
+        }
+        if conversation_context:
+            action_ctx["conversation_context"] = conversation_context
+
         self.context["profile"] = profile
         self.context["plan"] = plan
         self.context["activities"] = activities
-        if conversation_context:
-            self.context["conversation_context"] = conversation_context
 
-        # REASONING: assess current training vs plan
-        self.transition(AgentState.REASONING)
-        assessment = assess_training(
-            profile, plan, activities,
-            conversation_context=conversation_context,
-            beliefs=beliefs,
-        )
-        self.context["assessment"] = assessment
+        # ── ACTION LOOP: select → execute → observe ───────────────
+        actions_taken = []
 
-        # Load relevant past episodes for planning context
-        from src.memory.episodes import list_episodes, retrieve_relevant_episodes
-        episodes = list_episodes(limit=10)
-        relevant_episodes = retrieve_relevant_episodes(
-            {"goal": profile.get("goal", {}), "sports": profile.get("sports", [])},
-            episodes,
-            max_results=5,
-        )
+        for iteration in range(MAX_ACTIONS_PER_CYCLE):
+            # SELECT: ask the LLM what to do next
+            self.transition(AgentState.SELECTING)
+            selection = select_action(action_ctx, actions_taken=actions_taken)
+            action_name = selection.get("action", "respond")
+            reasoning = selection.get("reasoning", "")
 
-        # PLANNING: generate adjusted plan
-        self.transition(AgentState.PLANNING)
-        adjustments = assessment.get("recommended_adjustments", [])
-        adjusted_plan = generate_adjusted_plan(
-            profile, plan, assessment,
-            relevant_episodes=relevant_episodes,
-            beliefs=beliefs, activities=activities,
-        )
-        self.context["adjusted_plan"] = adjusted_plan
+            self.context["actions_selected"].append({
+                "iteration": iteration,
+                "action": action_name,
+                "reasoning": reasoning,
+            })
+            actions_taken.append(action_name)
 
-        # PROPOSING: classify adjustments by impact
-        self.transition(AgentState.PROPOSING)
-        autonomy_result = classify_and_apply(adjustments)
-        self.context["autonomy_result"] = autonomy_result
+            # Stop if agent decides no more actions needed
+            if action_name == "respond":
+                break
 
-        # EXECUTING: save the plan (caller handles persistence)
-        self.transition(AgentState.EXECUTING)
+            # EXECUTE: run the selected action
+            self.transition(AgentState.EXECUTING)
+            try:
+                result = execute_action(action_name, action_ctx)
+            except Exception as e:
+                result = {"error": str(e)}
 
-        # REFLECTING: record that this cycle considered past reflections
-        self.transition(AgentState.REFLECTING)
-        self.context["episodes_considered"] = len(relevant_episodes)
+            self.context["action_results"].append({
+                "iteration": iteration,
+                "action": action_name,
+                "result_keys": list(result.keys()),
+                "error": result.get("error"),
+            })
 
+            # OBSERVE: merge results into context for next iteration
+            self.transition(AgentState.OBSERVING)
+            action_ctx.update(result)
+            self.context.update(result)
+
+        # ── FINALIZE: return backwards-compatible result ──────────
         self.transition(AgentState.IDLE)
 
         return {
-            "assessment": assessment,
-            "adjusted_plan": adjusted_plan,
-            "autonomy_result": autonomy_result,
+            "assessment": action_ctx.get("assessment"),
+            "adjusted_plan": action_ctx.get("adjusted_plan"),
+            "autonomy_result": action_ctx.get("autonomy_result"),
             "cycle_context": self.context,
         }
