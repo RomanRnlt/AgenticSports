@@ -74,7 +74,11 @@ def _handle_assess_activities(ctx: dict) -> dict:
 
 
 def _handle_generate_plan(ctx: dict) -> dict:
-    """Generate or regenerate a training plan."""
+    """Generate or regenerate a training plan.
+
+    If plan_feedback exists in context (from evaluate_plan), it's available
+    for the planner to address the evaluator's critique on regeneration.
+    """
     assessment = ctx.get("assessment")
 
     if assessment:
@@ -157,6 +161,45 @@ def _handle_classify_adjustments(ctx: dict) -> dict:
     return {"autonomy_result": result}
 
 
+def _handle_evaluate_plan(ctx: dict) -> dict:
+    """Evaluate a generated plan's quality and decide if regeneration is needed."""
+    from src.agent.plan_evaluator import evaluate_plan, PLAN_ACCEPTANCE_THRESHOLD
+
+    plan = ctx.get("adjusted_plan") or ctx.get("plan", {})
+    profile = ctx["profile"]
+    beliefs = ctx.get("beliefs")
+    assessment = ctx.get("assessment")
+
+    evaluation = evaluate_plan(plan, profile, beliefs=beliefs, assessment=assessment)
+
+    # Track evaluation history for regeneration decisions
+    plan_scores = ctx.get("plan_scores", [])
+    plan_scores.append(evaluation.score)
+
+    result = {
+        "plan_evaluation": {
+            "score": evaluation.score,
+            "criteria": evaluation.criteria_scores,
+            "issues": evaluation.issues,
+            "suggestions": evaluation.suggestions,
+            "acceptable": evaluation.acceptable,
+        },
+        "plan_scores": plan_scores,
+        "plan_iterations": len(plan_scores),
+    }
+
+    # If not acceptable and under iteration limit, inject feedback for regeneration
+    if not evaluation.acceptable and len(plan_scores) < 3:
+        result["plan_feedback"] = (
+            f"Previous plan scored {evaluation.score}/100. "
+            f"Issues: {'; '.join(evaluation.issues[:3])}. "
+            f"Suggestions: {'; '.join(evaluation.suggestions[:3])}. "
+            f"Address these in the regenerated plan."
+        )
+
+    return result
+
+
 def _handle_respond(ctx: dict) -> dict:
     """No further action needed — signal to respond to user."""
     return {"action": "respond", "reason": "no further action needed"}
@@ -206,6 +249,16 @@ ACTIONS: dict[str, Action] = {
         requires=["profile"],
         produces=["episodes", "relevant_episodes"],
     ),
+    "evaluate_plan": Action(
+        name="evaluate_plan",
+        description="Score a generated plan's quality (0-100) and provide feedback. "
+                    "Use AFTER generate_plan to check sport distribution, target "
+                    "specificity, and constraint compliance. If score < 70, the plan "
+                    "should be regenerated with the feedback.",
+        handler=_handle_evaluate_plan,
+        requires=["profile", "adjusted_plan"],
+        produces=["plan_evaluation", "plan_scores", "plan_iterations"],
+    ),
     "classify_adjustments": Action(
         name="classify_adjustments",
         description="Classify proposed adjustments by impact level (low/medium/high) "
@@ -253,9 +306,12 @@ Rules:
 - If activities exist but haven't been assessed, assess_activities is usually first
 - After assessment, decide if a plan update is needed based on compliance
 - query_episodes is valuable before planning if episodes haven't been loaded
+- AFTER generate_plan, ALWAYS use evaluate_plan to check quality
+- If plan_evaluation shows score < 70 and plan_iterations < 3, use generate_plan again (regenerate with feedback)
+- If plan_evaluation shows score >= 70, the plan is accepted — proceed to classify_adjustments or respond
 - classify_adjustments is needed after assessment before responding
 - respond means "I'm done, no more actions needed"
-- Do NOT repeat actions already taken this cycle
+- Do NOT repeat actions already taken this cycle UNLESS it is generate_plan after a low evaluation score
 - If assessment shows good compliance (>= 0.8) and no high-impact adjustments, you may skip generate_plan
 """
 
@@ -288,6 +344,14 @@ def _build_context_summary(ctx: dict) -> str:
 
     if ctx.get("relevant_episodes"):
         parts.append(f"Episodes loaded: {len(ctx['relevant_episodes'])}")
+
+    if ctx.get("plan_evaluation"):
+        pe = ctx["plan_evaluation"]
+        parts.append(f"Plan evaluation: score={pe.get('score', '?')}/100, "
+                     f"acceptable={pe.get('acceptable', '?')}, "
+                     f"iterations={ctx.get('plan_iterations', 0)}")
+        if pe.get("issues"):
+            parts.append(f"Plan issues: {'; '.join(pe['issues'][:2])}")
 
     if ctx.get("autonomy_result"):
         ar = ctx["autonomy_result"]

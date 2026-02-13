@@ -1,4 +1,4 @@
-"""Priority 2 tests: Agent Action Space and dynamic action selection.
+"""Priority 2+3 tests: Agent Action Space, cognitive loop, and observation quality.
 
 Validates audit findings #1 (linear pipeline → cognitive loop) and #2 (no tool
 selection → dynamic action space). Tests verify BEHAVIORAL correctness — the agent
@@ -21,7 +21,7 @@ from src.agent.actions import (
     _build_actions_description,
     _handle_respond,
 )
-from src.agent.state_machine import AgentCore, AgentState, MAX_ACTIONS_PER_CYCLE
+from src.agent.state_machine import AgentCore, AgentState, MAX_ACTIONS_PER_CYCLE, _evaluate_result_quality
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -119,8 +119,9 @@ class TestActionRegistry:
 
     def test_all_required_actions_registered(self):
         required = {
-            "assess_activities", "generate_plan", "evaluate_trajectory",
-            "update_beliefs", "query_episodes", "classify_adjustments", "respond",
+            "assess_activities", "generate_plan", "evaluate_plan",
+            "evaluate_trajectory", "update_beliefs", "query_episodes",
+            "classify_adjustments", "respond",
         }
         assert required == set(ACTIONS.keys())
 
@@ -575,3 +576,103 @@ class TestDynamicBehavior:
 
         # The two sequences must be different — proving non-fixed behavior
         assert seq_a != seq_b
+
+
+# ── Observation Quality Scoring Tests ───────────────────────────────
+
+class TestObservationQuality:
+    """P3: Verify action results get quality scores in the OBSERVE phase."""
+
+    def test_error_result_scores_zero(self):
+        assert _evaluate_result_quality("assess_activities", {"error": "timeout"}) == 0.0
+
+    def test_good_assessment_scores_high(self):
+        result = {
+            "assessment": {
+                "assessment": {
+                    "compliance": 0.85,
+                    "observations": ["Good run pace"],
+                    "fitness_trend": "improving",
+                }
+            }
+        }
+        score = _evaluate_result_quality("assess_activities", result)
+        assert score == 1.0
+
+    def test_empty_assessment_scores_low(self):
+        result = {"assessment": {"assessment": {}}}
+        score = _evaluate_result_quality("assess_activities", result)
+        assert score == 0.0
+
+    def test_plan_with_targets_scores_high(self):
+        result = {
+            "adjusted_plan": {
+                "sessions": [
+                    {"sport": "running", "targets": {"pace": "5:00"}},
+                    {"sport": "cycling", "targets": {"power": 200}},
+                ]
+            }
+        }
+        score = _evaluate_result_quality("generate_plan", result)
+        assert score == 1.0
+
+    def test_empty_plan_scores_zero(self):
+        result = {"adjusted_plan": {"sessions": []}}
+        score = _evaluate_result_quality("generate_plan", result)
+        assert score == 0.0
+
+    def test_plan_without_targets_scores_medium(self):
+        result = {
+            "adjusted_plan": {
+                "sessions": [
+                    {"sport": "running"},
+                    {"sport": "cycling"},
+                ]
+            }
+        }
+        score = _evaluate_result_quality("generate_plan", result)
+        assert 0.0 < score < 1.0  # has sport but no targets
+
+    def test_trajectory_with_on_track_scores_full(self):
+        result = {"trajectory": {"trajectory": {"on_track": True}}}
+        assert _evaluate_result_quality("evaluate_trajectory", result) == 1.0
+
+    def test_trajectory_without_on_track_scores_zero(self):
+        result = {"trajectory": {"trajectory": {}}}
+        assert _evaluate_result_quality("evaluate_trajectory", result) == 0.0
+
+    def test_episodes_quality_scales_with_count(self):
+        assert _evaluate_result_quality("query_episodes", {"relevant_episodes": []}) == 0.0
+        assert _evaluate_result_quality("query_episodes", {"relevant_episodes": [1, 2, 3]}) == 1.0
+        score_partial = _evaluate_result_quality("query_episodes", {"relevant_episodes": [1]})
+        assert 0.0 < score_partial < 1.0
+
+    def test_respond_always_scores_one(self):
+        assert _evaluate_result_quality("respond", {}) == 1.0
+
+    def test_quality_appears_in_cycle_results(self, sample_profile, sample_plan, sample_activities):
+        """Verify quality scores are recorded in cycle_context."""
+        call_count = 0
+
+        def mock_select(ctx, actions_taken=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"action": "assess_activities", "reasoning": "check"}
+            return {"action": "respond", "reasoning": "done"}
+
+        mock_result = {
+            "assessment": {
+                "assessment": {"compliance": 0.85, "observations": ["ok"], "fitness_trend": "stable"}
+            }
+        }
+
+        with patch("src.agent.actions.select_action", mock_select), \
+             patch("src.agent.actions.execute_action", return_value=mock_result):
+            agent = AgentCore()
+            result = agent.run_cycle(sample_profile, sample_plan, sample_activities)
+
+        action_results = result["cycle_context"]["action_results"]
+        assert len(action_results) == 1
+        assert "quality" in action_results[0]
+        assert action_results[0]["quality"] == 1.0

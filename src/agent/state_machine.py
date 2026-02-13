@@ -35,6 +35,61 @@ class AgentState(Enum):
 MAX_ACTIONS_PER_CYCLE = 6
 
 
+def _evaluate_result_quality(action_name: str, result: dict) -> float:
+    """Score the quality of an action result (0.0-1.0).
+
+    Used in the OBSERVE phase to inform subsequent action selection.
+    A low quality score signals the cognitive loop may need to retry
+    or take corrective action.
+    """
+    # Error results have zero quality
+    if result.get("error"):
+        return 0.0
+
+    if action_name == "assess_activities":
+        assessment = result.get("assessment", {}).get("assessment", {})
+        # Quality is high if assessment has compliance and observations
+        has_compliance = assessment.get("compliance") is not None
+        has_observations = len(assessment.get("observations", [])) > 0
+        has_trend = assessment.get("fitness_trend") is not None
+        score = sum([has_compliance, has_observations, has_trend]) / 3.0
+        return round(score, 2)
+
+    if action_name == "generate_plan":
+        plan = result.get("adjusted_plan", {})
+        sessions = plan.get("sessions", [])
+        if not sessions:
+            return 0.0
+        # Check sessions have required fields
+        has_targets = sum(1 for s in sessions if s.get("targets") or s.get("steps")) / len(sessions)
+        has_sport = sum(1 for s in sessions if s.get("sport")) / len(sessions)
+        return round((has_targets + has_sport) / 2.0, 2)
+
+    if action_name == "evaluate_trajectory":
+        trajectory = result.get("trajectory", {}).get("trajectory", {})
+        return 1.0 if trajectory.get("on_track") is not None else 0.0
+
+    if action_name == "query_episodes":
+        episodes = result.get("relevant_episodes", [])
+        return min(1.0, len(episodes) / 3.0)
+
+    if action_name == "evaluate_plan":
+        pe = result.get("plan_evaluation", {})
+        score = pe.get("score", 0)
+        # Quality is the normalized evaluation score
+        return round(min(1.0, score / 100.0), 2)
+
+    if action_name == "classify_adjustments":
+        ar = result.get("autonomy_result", {})
+        return 1.0 if ar else 0.0
+
+    if action_name == "update_beliefs":
+        return 1.0 if result.get("beliefs_updated") else 0.0
+
+    # respond or unknown — pass-through quality
+    return 1.0
+
+
 class AgentCore:
     """Orchestrates the agent cognitive cycle with dynamic action selection.
 
@@ -138,15 +193,18 @@ class AgentCore:
             except Exception as e:
                 result = {"error": str(e)}
 
+            # OBSERVE: evaluate result quality and merge into context
+            self.transition(AgentState.OBSERVING)
+            quality = _evaluate_result_quality(action_name, result)
+
             self.context["action_results"].append({
                 "iteration": iteration,
                 "action": action_name,
                 "result_keys": list(result.keys()),
                 "error": result.get("error"),
+                "quality": quality,
             })
 
-            # OBSERVE: merge results into context for next iteration
-            self.transition(AgentState.OBSERVING)
             action_ctx.update(result)
             self.context.update(result)
 
