@@ -121,7 +121,7 @@ class TestActionRegistry:
         required = {
             "assess_activities", "generate_plan", "evaluate_plan",
             "evaluate_trajectory", "update_beliefs", "query_episodes",
-            "classify_adjustments", "respond",
+            "classify_adjustments", "check_proactive", "respond",
         }
         assert required == set(ACTIONS.keys())
 

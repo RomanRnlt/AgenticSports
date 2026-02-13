@@ -748,6 +748,14 @@ class ConversationEngine:
         if result.get("trigger_cycle"):
             self._cycle_triggered = True
 
+        # 6.3 Refresh proactive triggers periodically (P8 — audit finding #7)
+        self._maybe_refresh_proactive_triggers()
+
+        # 6.5 Mid-conversation proactive injection (P8 — audit finding #7)
+        proactive_note = self._check_proactive_injection(user_message, route)
+        if proactive_note:
+            response_text = response_text.rstrip() + "\n\n" + proactive_note
+
         # 7. Update rolling summary if needed
         if self._turns_since_summary >= ROLLING_SUMMARY_INTERVAL:
             self._update_rolling_summary()
@@ -843,6 +851,120 @@ class ConversationEngine:
         parts.append(f"=== CURRENT MESSAGE ===\nUser: {user_message}")
 
         return "\n\n".join(parts)
+
+    def _maybe_refresh_proactive_triggers(self) -> None:
+        """Refresh the proactive queue with new triggers from current data.
+
+        P8 enhancement: periodically scans activities, episodes, and trajectory
+        during conversation to detect new proactive triggers. Runs every
+        PROACTIVE_REFRESH_INTERVAL turns to avoid excessive computation.
+        """
+        from src.agent.proactive import PROACTIVE_REFRESH_INTERVAL
+
+        # Only refresh every N user turns (turn_count includes agent turns,
+        # so divide by 2 to approximate user turn count)
+        user_turns = self._turn_count // 2
+        if user_turns < 1 or user_turns % PROACTIVE_REFRESH_INTERVAL != 0:
+            return
+
+        try:
+            from src.agent.proactive import refresh_proactive_triggers
+            from src.tools.activity_store import list_activities
+            from src.memory.episodes import list_episodes
+            from src.agent.trajectory import assess_trajectory
+
+            profile = self.user_model.structured_core
+            activities = list_activities()
+            episodes = list_episodes(limit=10)
+
+            # Lightweight trajectory for trigger detection
+            trajectory = {}
+            try:
+                trajectory = assess_trajectory(
+                    profile, activities, episodes,
+                    self._load_current_plan() or {"sessions": []},
+                )
+            except Exception:
+                pass
+
+            refresh_proactive_triggers(
+                activities=activities,
+                episodes=episodes,
+                trajectory=trajectory,
+                athlete_profile=profile,
+                context={"goal": profile.get("goal", {})},
+            )
+        except Exception:
+            pass  # Never fail the conversation due to proactive refresh
+
+    def _check_proactive_injection(self, user_message: str, route: str | None) -> str | None:
+        """Check if a proactive insight should be injected into the response.
+
+        P8 enhancement: mid-conversation proactive injection. Uses LLM to
+        decide if any pending proactive messages are relevant to the current
+        conversation topic. Skips injection for greetings/thanks (general_chat).
+
+        Returns the proactive note text, or None.
+        """
+        # Don't inject on simple chat (greetings, thanks)
+        if route == "general_chat":
+            return None
+
+        try:
+            from src.agent.proactive import get_pending_messages, deliver_message
+
+            pending = get_pending_messages()
+            if not pending:
+                return None
+
+            # Build message descriptions from stored message_text or fallback
+            def _describe(m: dict) -> str:
+                text = m.get("message_text", "")
+                if not text:
+                    # Backwards compat: format from trigger_type + data
+                    data = m.get("data", {})
+                    text = data.get("message", "") or data.get("reasoning", "") or str(data)
+                return f"[{m.get('trigger_type', '?')}] {text}"
+
+            messages_summary = "\n".join(
+                f"- {_describe(m)}" for m in pending[:3]
+            )
+
+            prompt = (
+                "You are a coaching AI. Decide if any of these insights should be "
+                "naturally mentioned given the athlete's current message.\n\n"
+                f"Athlete said: \"{user_message[:300]}\"\n\n"
+                f"Available insights:\n{messages_summary}\n\n"
+                "Rules:\n"
+                "- Only inject if genuinely relevant to what they're discussing\n"
+                "- Return the insight as a brief, natural coaching note\n"
+                "- If nothing is relevant, return empty text\n\n"
+                "Respond with ONLY a JSON object:\n"
+                '{{"inject": true|false, "index": 0, "note": "brief coaching note"}}'
+            )
+
+            client = get_client()
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=[
+                    genai.types.Content(
+                        role="user",
+                        parts=[genai.types.Part(text=prompt)],
+                    ),
+                ],
+                config=genai.types.GenerateContentConfig(temperature=0.3),
+            )
+
+            result = extract_json(response.text.strip())
+            if result.get("inject") and isinstance(result.get("index"), int):
+                idx = result["index"]
+                if 0 <= idx < len(pending):
+                    deliver_message(pending[idx]["id"])
+                    return result.get("note", "")
+        except Exception:
+            pass
+
+        return None
 
     def _detect_conversation_phase(self) -> str:
         """Determine conversation phase for dynamic token budget allocation."""

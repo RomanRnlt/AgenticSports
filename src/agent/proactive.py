@@ -267,6 +267,7 @@ def queue_proactive_message(
     trigger: dict,
     priority: float = 0.5,
     queue_path: Path | None = None,
+    context: dict | None = None,
 ) -> dict:
     """Add a proactive trigger to the message queue.
 
@@ -274,17 +275,22 @@ def queue_proactive_message(
         trigger: Trigger dict with type, priority, data fields.
         priority: Numeric priority 0.0-1.0 (higher = more urgent).
         queue_path: Optional path for the queue file (for testing).
+        context: Optional context dict for format_proactive_message().
 
     Returns:
         The queued message dict.
     """
     queue = _load_queue(queue_path)
 
+    # Format a human-readable message for LLM consumption
+    message_text = format_proactive_message(trigger, context or {})
+
     msg = {
         "id": f"msg_{uuid.uuid4().hex[:8]}",
         "trigger_type": trigger.get("type", "unknown"),
         "priority": priority,
         "data": trigger.get("data", {}),
+        "message_text": message_text,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "delivered_at": None,
         "status": "pending",
@@ -392,6 +398,74 @@ def expire_stale_messages(
         _save_queue(queue, queue_path)
 
     return expired
+
+
+# ── Mid-Conversation Trigger Refresh (P8) ────────────────────────
+
+
+# Priority mapping from string to numeric
+_PRIORITY_MAP = {"high": 0.9, "medium": 0.5, "low": 0.2}
+
+# How often to refresh triggers during conversation (in turns)
+PROACTIVE_REFRESH_INTERVAL = 3
+
+
+def refresh_proactive_triggers(
+    activities: list[dict],
+    episodes: list[dict],
+    trajectory: dict,
+    athlete_profile: dict,
+    queue_path: Path | None = None,
+    context: dict | None = None,
+) -> list[dict]:
+    """Check for new proactive triggers and queue any that aren't already pending.
+
+    P8 enhancement: called during conversation (not just startup) to keep
+    the proactive queue fresh with relevant insights.
+
+    Deduplicates: won't queue a trigger if a pending message of the same
+    type already exists.
+
+    Args:
+        activities: Recent activity dicts.
+        episodes: Episode dicts.
+        trajectory: Trajectory dict.
+        athlete_profile: Athlete profile dict.
+        queue_path: Optional queue file path (for testing).
+        context: Optional context for message formatting.
+
+    Returns:
+        List of newly queued message dicts.
+    """
+    # Detect triggers from current data
+    triggers = check_proactive_triggers(
+        athlete_profile, activities, episodes, trajectory,
+    )
+
+    if not triggers:
+        return []
+
+    # Get existing pending types to avoid duplicates
+    pending = get_pending_messages(queue_path)
+    pending_types = {m.get("trigger_type") for m in pending}
+
+    queued = []
+    for trigger in triggers:
+        trigger_type = trigger.get("type", "unknown")
+        if trigger_type in pending_types:
+            continue  # Already queued
+
+        priority_str = trigger.get("priority", "medium")
+        priority_num = _PRIORITY_MAP.get(priority_str, 0.5)
+
+        msg = queue_proactive_message(
+            trigger, priority=priority_num,
+            queue_path=queue_path, context=context,
+        )
+        queued.append(msg)
+        pending_types.add(trigger_type)
+
+    return queued
 
 
 # ── Silence Decay ────────────────────────────────────────────────

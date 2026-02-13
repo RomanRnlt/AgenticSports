@@ -239,6 +239,85 @@ def _handle_evaluate_plan(ctx: dict) -> dict:
     return result
 
 
+def _handle_check_proactive(ctx: dict) -> dict:
+    """Check proactive queue for insights relevant to the current conversation.
+
+    P8 enhancement: enables mid-conversation proactive injection instead of
+    startup-only. Uses LLM to determine if any queued insights are relevant
+    to the current conversation topic.
+    """
+    from src.agent.proactive import get_pending_messages, deliver_message
+
+    pending = get_pending_messages()
+    if not pending:
+        return {"proactive_injection": None}
+
+    conversation_context = ctx.get("conversation_context", "")
+    if not conversation_context:
+        return {"proactive_injection": None}
+
+    # Use LLM to decide which (if any) pending message is relevant
+    try:
+        client = get_client()
+
+        def _describe_msg(m: dict) -> str:
+            text = m.get("message_text", "")
+            if not text:
+                data = m.get("data", {})
+                text = data.get("message", "") or data.get("reasoning", "") or str(data)
+            return f"[{m.get('trigger_type', '?')}] {text}"
+
+        messages_summary = "\n".join(
+            f"- {_describe_msg(m)}" for m in pending[:5]
+        )
+
+        prompt = (
+            "You are a coaching AI deciding whether to proactively surface an insight.\n\n"
+            f"Current conversation topic:\n{conversation_context[:500]}\n\n"
+            f"Available coaching insights:\n{messages_summary}\n\n"
+            "Should any of these insights be naturally woven into the conversation?\n"
+            "Only select an insight if it's genuinely relevant to what the athlete "
+            "is currently discussing. Do NOT inject if the conversation is just a greeting or thanks.\n\n"
+            'Respond with ONLY a JSON object:\n'
+            '{"inject": true|false, "index": 0, "reasoning": "why this is relevant now"}\n'
+            "index = 0-based index of the insight to inject (only if inject=true)"
+        )
+
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[
+                genai.types.Content(
+                    role="user",
+                    parts=[genai.types.Part(text=prompt)],
+                ),
+            ],
+            config=genai.types.GenerateContentConfig(temperature=0.2),
+        )
+
+        result = extract_json(response.text.strip())
+        if result.get("inject") and isinstance(result.get("index"), int):
+            idx = result["index"]
+            if 0 <= idx < len(pending):
+                selected = pending[idx]
+                # Mark as delivered
+                deliver_message(selected["id"])
+                text = selected.get("message_text", "")
+                if not text:
+                    data = selected.get("data", {})
+                    text = data.get("message", "") or str(data)
+                return {
+                    "proactive_injection": {
+                        "type": selected.get("trigger_type", "insight"),
+                        "text": text,
+                        "reasoning": result.get("reasoning", ""),
+                    },
+                }
+    except Exception:
+        pass
+
+    return {"proactive_injection": None}
+
+
 def _handle_respond(ctx: dict) -> dict:
     """No further action needed — signal to respond to user."""
     return {"action": "respond", "reason": "no further action needed"}
@@ -306,6 +385,15 @@ ACTIONS: dict[str, Action] = {
         handler=_handle_classify_adjustments,
         requires=["assessment"],
         produces=["autonomy_result"],
+    ),
+    "check_proactive": Action(
+        name="check_proactive",
+        description="Check if any proactive coaching insights should be surfaced in "
+                    "the current conversation. Use after assessment or before responding "
+                    "if conversation context is available. Only inject if relevant.",
+        handler=_handle_check_proactive,
+        requires=["conversation_context"],
+        produces=["proactive_injection"],
     ),
     "respond": Action(
         name="respond",
