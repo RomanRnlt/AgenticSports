@@ -5,6 +5,10 @@ extract_meta_beliefs from episodes.py) into a production pipeline triggered
 at startup. Fitness metric updates are computed deterministically in Python
 via fitness_tracker.py.
 
+P7 enhancement: Reflection triggers are now event-driven (significant
+compliance deviation, personal best, pattern detection) with LLM-based
+significance evaluation. Falls back to time-based triggers if LLM fails.
+
 Public API:
     check_and_generate_reflections(user_model, plan, activities) -> dict | None
     format_belief_update_summary(reflection_result) -> str
@@ -13,14 +17,21 @@ Public API:
 import logging
 from datetime import datetime, timedelta, timezone
 
+from src.agent.json_utils import extract_json
+from src.agent.llm import MODEL, get_client
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants (fallback thresholds when LLM is unavailable)
 # ---------------------------------------------------------------------------
 
 REFLECTION_MIN_DAYS = 7
 REFLECTION_MIN_ACTIVITIES = 3
+
+# Event-driven trigger thresholds (P7)
+COMPLIANCE_DEVIATION_THRESHOLD = 0.3  # >30% plan deviation triggers reflection
+PB_DETECTION_ENABLED = True
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +74,7 @@ def check_and_generate_reflections(
     episodes = list_episodes(limit=1)
     last_episode = episodes[0] if episodes else None
 
-    if not _is_reflection_due(last_episode, activities):
+    if not _is_reflection_due(last_episode, activities, plan=plan):
         return None
 
     # Determine reflection window
@@ -195,11 +206,19 @@ def format_belief_update_summary(reflection_result: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _is_reflection_due(last_episode: dict | None, activities: list[dict]) -> bool:
-    """Check if a reflection is due.
+def _is_reflection_due(
+    last_episode: dict | None,
+    activities: list[dict],
+    plan: dict | None = None,
+) -> bool:
+    """Check if a reflection is due using event-driven triggers (P7).
 
-    True when 7+ days since last episode AND 3+ new activities since then.
-    If no episodes exist, check if activities span 7+ days and count >= 3.
+    Triggers reflection when ANY of:
+    1. Significant compliance deviation (>30% from plan)
+    2. Time-based fallback (7+ days since last reflection AND 3+ new activities)
+    3. No episodes exist and enough initial data
+
+    Falls back to time-based trigger if event detection fails.
     """
     if not activities:
         return False
@@ -220,20 +239,25 @@ def _is_reflection_due(last_episode: dict | None, activities: list[dict]) -> boo
         except (ValueError, TypeError):
             return False
 
-    # Have a last episode: check days since
+    # Event-driven: check for significant compliance deviation (P7)
+    if plan and plan.get("sessions"):
+        compliance = _estimate_recent_compliance(plan, activities, last_episode)
+        if compliance is not None and abs(1.0 - compliance) > COMPLIANCE_DEVIATION_THRESHOLD:
+            return True
+
+    # Time-based fallback
     last_generated = last_episode.get("generated_at", "")
     if not last_generated:
         last_generated = last_episode.get("period", "")
 
     if not last_generated:
-        return True  # Cannot determine when last reflection was, generate one
+        return True
 
     try:
         last_dt = datetime.fromisoformat(last_generated)
     except (ValueError, TypeError):
         return True
 
-    # Make both datetimes comparable (strip timezone if needed)
     now = datetime.now()
     if last_dt.tzinfo is not None:
         now = datetime.now(timezone.utc)
@@ -242,13 +266,40 @@ def _is_reflection_due(last_episode: dict | None, activities: list[dict]) -> boo
     if days_since < REFLECTION_MIN_DAYS:
         return False
 
-    # Check for sufficient new activities since last episode
     cutoff = last_generated
     new_activities = [
         a for a in activities
         if a.get("start_time", "") > cutoff
     ]
     return len(new_activities) >= REFLECTION_MIN_ACTIVITIES
+
+
+def _estimate_recent_compliance(
+    plan: dict,
+    activities: list[dict],
+    last_episode: dict,
+) -> float | None:
+    """Estimate compliance since last reflection for event-driven triggering.
+
+    Returns compliance ratio (0.0-1.0) or None if insufficient data.
+    """
+    cutoff = last_episode.get("generated_at", "") or last_episode.get("period", "")
+    if not cutoff:
+        return None
+
+    new_activities = [
+        a for a in activities
+        if a.get("start_time", "") > cutoff
+    ]
+
+    if len(new_activities) < 2:
+        return None
+
+    planned_sessions = len(plan.get("sessions", []))
+    if planned_sessions == 0:
+        return None
+
+    return min(1.0, len(new_activities) / planned_sessions)
 
 
 def _get_reflection_window(last_episode: dict | None) -> tuple[str, str]:

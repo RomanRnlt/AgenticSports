@@ -174,18 +174,72 @@ def _detect_fitness_improvement(episodes: list[dict]) -> bool:
 
 
 def _detect_high_fatigue(activities: list[dict], episodes: list[dict]) -> bool:
-    """Detect signs of accumulated fatigue in recent data."""
-    # Check if recent activities have elevated HR for easy efforts
+    """Detect signs of accumulated fatigue in recent data.
+
+    P7 enhancement: Uses LLM to evaluate fatigue context instead of
+    fixed HR zone/threshold rules. Falls back to heuristic on failure.
+    """
+    if not activities:
+        return False
+
+    # Primary: LLM-based fatigue evaluation (P7)
+    try:
+        result = _detect_fatigue_llm(activities[-5:])
+        if result is not None:
+            return result
+    except Exception:
+        pass
+
+    # Fallback: heuristic (elevated HR in easy efforts)
     easy_activities = [
         a for a in activities[-5:] if a.get("hr_zone", 0) >= 3
         and a.get("heart_rate", {}).get("avg", 0) > 140
     ]
+    return len(easy_activities) >= 2
 
-    # Multiple easy-effort activities with high HR suggests fatigue
-    if len(easy_activities) >= 2:
-        return True
 
-    return False
+def _detect_fatigue_llm(recent_activities: list[dict]) -> bool | None:
+    """Evaluate fatigue using LLM. Returns None on failure."""
+    try:
+        from google import genai
+        from src.agent.json_utils import extract_json
+        from src.agent.llm import MODEL, get_client
+
+        # Build a concise activity summary
+        summaries = []
+        for a in recent_activities:
+            hr = a.get("heart_rate", {})
+            summaries.append(
+                f"- {a.get('sport', '?')}: {a.get('hr_zone', '?')} zone, "
+                f"avg HR {hr.get('avg', '?')}, "
+                f"{round(a.get('duration_seconds', 0) / 60)}min"
+            )
+
+        prompt = (
+            "Evaluate if this athlete shows signs of accumulated fatigue "
+            "based on their last 5 activities.\n\n"
+            f"Activities:\n{chr(10).join(summaries)}\n\n"
+            "Consider: elevated HR in easy efforts, HR drift patterns, "
+            "activity frequency. Respond with ONLY a JSON object:\n"
+            '{"fatigued": true|false, "reasoning": "1 sentence"}'
+        )
+
+        client = get_client()
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[
+                genai.types.Content(
+                    role="user",
+                    parts=[genai.types.Part(text=prompt)],
+                ),
+            ],
+            config=genai.types.GenerateContentConfig(temperature=0.1),
+        )
+
+        result = extract_json(response.text.strip())
+        return result.get("fatigued", False)
+    except Exception:
+        return None
 
 
 # ── Proactive Message Queue ──────────────────────────────────────

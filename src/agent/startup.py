@@ -4,6 +4,9 @@ Computes deterministic assessment data for the startup greeting. All arithmetic
 is done here so the LLM never computes numbers -- it only interprets and coaches.
 The greeting LLM call synthesizes the computed data into a coherent coaching message.
 
+P7 enhancement: Goal type inference uses LLM instead of keyword matching,
+with keyword fallback for reliability.
+
 Public API:
     infer_goal_type(goal) -> str
     compute_startup_assessment(plan, activities, goal) -> dict
@@ -13,6 +16,9 @@ Public API:
 import logging
 from datetime import datetime, timedelta, timezone
 
+from src.agent.json_utils import extract_json
+from src.agent.llm import MODEL, get_client
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -21,27 +27,89 @@ log = logging.getLogger(__name__)
 
 GOAL_TYPES = {"race_target", "performance_target", "routine", "general"}
 
+GOAL_TYPE_PROMPT = """\
+Classify this athlete's goal into exactly ONE category.
 
-def infer_goal_type(goal: dict) -> str:
+Categories:
+- race_target: Training for a specific race with a target time and date (e.g., "Berlin Marathon in 3:30 on 2026-09-27")
+- performance_target: Working toward a measurable performance goal without a specific race date (e.g., "Run a sub-20 5K", "Improve FTP to 300W")
+- routine: Maintaining regular training without a specific performance target (e.g., "Run 3 times per week", "Stay consistent")
+- general: Everything else, vague or no specific goal
+
+Goal event: "{event}"
+Target time: {target_time}
+Target date: {target_date}
+
+You MUST respond with ONLY a valid JSON object:
+{{"goal_type": "race_target|performance_target|routine|general"}}
+"""
+
+
+def infer_goal_type(goal: dict, use_llm: bool = True) -> str:
     """Infer goal type from structured_core.goal fields.
 
-    Rules (applied in order):
-    1. Has target_time AND target_date AND event -> "race_target"
-    2. Event name implies measurable performance -> "performance_target"
-    3. Event text mentions frequency/consistency patterns -> "routine"
-    4. Everything else -> "general"
+    Uses LLM-based inference (P7) with keyword fallback.
 
-    All string matching is case-insensitive.
+    Args:
+        goal: Dict with event, target_time, target_date fields.
+        use_llm: Whether to attempt LLM inference (disable for testing fallback).
     """
+    event = (goal.get("event") or "").lower()
+
+    # Primary: LLM-based inference (P7)
+    if use_llm and event:
+        result = _infer_goal_type_llm(goal)
+        if result in GOAL_TYPES:
+            return result
+
+    # Fallback: keyword heuristic
+    return _infer_goal_type_keywords(goal)
+
+
+def _infer_goal_type_llm(goal: dict) -> str | None:
+    """Infer goal type using LLM. Returns None on failure."""
+    try:
+        from google import genai
+
+        client = get_client()
+        prompt = GOAL_TYPE_PROMPT.format(
+            event=goal.get("event", "none"),
+            target_time=goal.get("target_time", "none"),
+            target_date=goal.get("target_date", "none"),
+        )
+
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[
+                genai.types.Content(
+                    role="user",
+                    parts=[genai.types.Part(text=prompt)],
+                ),
+            ],
+            config=genai.types.GenerateContentConfig(
+                temperature=0.1,
+            ),
+        )
+
+        result = extract_json(response.text.strip())
+        goal_type = result.get("goal_type", "")
+        if goal_type in GOAL_TYPES:
+            return goal_type
+    except Exception:
+        pass
+
+    return None
+
+
+def _infer_goal_type_keywords(goal: dict) -> str:
+    """Fallback: infer goal type using keyword matching."""
     event = (goal.get("event") or "").lower()
     has_target_time = bool(goal.get("target_time"))
     has_target_date = bool(goal.get("target_date"))
 
-    # Race target: specific event + time + date
     if has_target_time and has_target_date and event:
         return "race_target"
 
-    # Performance target: event name implies measurable performance
     performance_words = {
         "marathon", "half", "10k", "5k", "triathlon", "ironman",
         "century", "gran fondo", "time trial", "ftp", "improve",
@@ -49,7 +117,6 @@ def infer_goal_type(goal: dict) -> str:
     if event and any(w in event for w in performance_words):
         return "performance_target"
 
-    # Routine: frequency/consistency language
     routine_words = {
         "per week", "x run", "x bike", "x swim", "times a week",
         "consistency", "routine", "regular", "maintain",
@@ -272,22 +339,121 @@ def _compute_trends(recent_activities: list[dict]) -> dict:
     }
 
 
+TRIGGER_EVALUATION_PROMPT = """\
+You are a coaching AI evaluating training data for proactive insights.
+
+Given the following training metrics, decide which coaching triggers are warranted.
+Only flag triggers that are genuinely significant — avoid false positives.
+
+Training data:
+- TRIMP trend: {trimp_direction}
+- Volume trend: {volume_direction}
+- Sessions per week: {sessions_per_week}
+- Compliance: {compliance_info}
+
+For each trigger found, return it with a priority.
+
+You MUST respond with ONLY a valid JSON object:
+{{"triggers": [
+    {{"type": "fatigue_warning|fitness_improving|compliance_low|great_consistency",
+      "priority": "high|medium|low",
+      "reasoning": "why this is significant"}}
+]}}
+
+Rules:
+- fatigue_warning: TRIMP increasing significantly (consider athlete's baseline)
+- fitness_improving: consistent training with positive volume trend
+- compliance_low: substantially missing planned sessions
+- great_consistency: exceptional plan adherence
+- Return empty triggers array if nothing is noteworthy
+"""
+
+
 def _detect_triggers(
     weekly_compliance: dict | None,
     trends: dict,
     recent_activities: list[dict],
+    use_llm: bool = True,
 ) -> list[dict]:
     """Detect data-driven triggers from computed assessment data.
 
-    Triggers are simple, data-driven, no LLM call. Each trigger is:
-    {"type": str, "priority": "high"|"medium"|"low", "data": {...}}
+    P7 enhancement: Uses LLM to evaluate significance of training data
+    patterns, avoiding false positives from fixed thresholds. Falls back
+    to heuristic thresholds if LLM is unavailable.
+
+    Each trigger is: {"type": str, "priority": "high"|"medium"|"low", "data": {...}}
     """
+    # Primary: LLM-based trigger evaluation (P7)
+    if use_llm:
+        result = _detect_triggers_llm(weekly_compliance, trends)
+        if result is not None:
+            return result
+
+    # Fallback: heuristic thresholds
+    return _detect_triggers_heuristic(weekly_compliance, trends)
+
+
+def _detect_triggers_llm(
+    weekly_compliance: dict | None,
+    trends: dict,
+) -> list[dict] | None:
+    """Detect triggers using LLM evaluation. Returns None on failure."""
+    try:
+        from google import genai
+
+        compliance_info = "no plan" if not weekly_compliance else (
+            f"rate={weekly_compliance.get('compliance_rate', '?')}, "
+            f"matched={weekly_compliance.get('matched_count', '?')}/{weekly_compliance.get('planned_count', '?')}"
+        )
+
+        prompt = TRIGGER_EVALUATION_PROMPT.format(
+            trimp_direction=trends.get("trimp_direction", "no data"),
+            volume_direction=trends.get("volume_direction", "no data"),
+            sessions_per_week=trends.get("sessions_per_week", []),
+            compliance_info=compliance_info,
+        )
+
+        client = get_client()
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[
+                genai.types.Content(
+                    role="user",
+                    parts=[genai.types.Part(text=prompt)],
+                ),
+            ],
+            config=genai.types.GenerateContentConfig(
+                temperature=0.2,
+            ),
+        )
+
+        result = extract_json(response.text.strip())
+        raw_triggers = result.get("triggers", [])
+
+        # Convert to standard trigger format
+        valid_types = {"fatigue_warning", "fitness_improving", "compliance_low", "great_consistency"}
+        triggers = []
+        for t in raw_triggers:
+            if t.get("type") in valid_types:
+                triggers.append({
+                    "type": t["type"],
+                    "priority": t.get("priority", "medium"),
+                    "data": {"reasoning": t.get("reasoning", "")},
+                })
+        return triggers
+    except Exception:
+        return None
+
+
+def _detect_triggers_heuristic(
+    weekly_compliance: dict | None,
+    trends: dict,
+) -> list[dict]:
+    """Fallback: detect triggers using fixed thresholds."""
     triggers = []
 
-    # Fatigue warning: TRIMP trend increasing >30%
     trimp_dir = trends.get("trimp_direction", "")
     if "increasing" in trimp_dir:
-        # Extract percentage from string like "increasing (+35%)"
         try:
             pct_str = trimp_dir.split("(")[1].rstrip("%)").lstrip("+")
             pct_val = float(pct_str)
@@ -300,11 +466,9 @@ def _detect_triggers(
         except (IndexError, ValueError):
             pass
 
-    # Fitness improving: volume trend increasing and sessions consistent
     vol_dir = trends.get("volume_direction", "")
     sessions = trends.get("sessions_per_week", [])
     if "increasing" in vol_dir and len(sessions) >= 2:
-        # Check consistency: no week with 0 sessions
         if all(s > 0 for s in sessions):
             triggers.append({
                 "type": "fitness_improving",
@@ -312,7 +476,6 @@ def _detect_triggers(
                 "data": {"volume_trend": vol_dir, "sessions_per_week": sessions},
             })
 
-    # Compliance-based triggers
     if weekly_compliance:
         rate = weekly_compliance.get("compliance_rate", 0)
         if rate < 0.6:
