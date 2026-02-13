@@ -685,9 +685,17 @@ class ConversationEngine:
         self._turn_count += 1
         self._turns_since_summary += 1
 
-        # 2. Build prompt and call LLM
+        # 1.5. Classify message for routing (v2.0 audit finding #8)
+        route = "general_chat"
+        try:
+            from src.agent.router import classify_message, get_budget_overrides
+            route = classify_message(user_message)
+        except Exception:
+            pass  # Fall back to general_chat on any routing error
+
+        # 2. Build prompt and call LLM (with route-aware budgets)
         phase = self._detect_conversation_phase()
-        prompt = self._build_conversation_prompt(user_message, phase)
+        prompt = self._build_conversation_prompt(user_message, phase, route=route)
 
         client = get_client()
         system_prompt = CONVERSATION_SYSTEM_PROMPT.format(
@@ -744,11 +752,11 @@ class ConversationEngine:
         if self._turns_since_summary >= ROLLING_SUMMARY_INTERVAL:
             self._update_rolling_summary()
 
-        # 8. Log agent response
+        # 8. Log agent response with route metadata
         artifacts = []
         if result.get("trigger_cycle"):
             artifacts.append(f"cycle_triggered:{result.get('cycle_reason', 'unknown')}")
-        self._append_to_session("agent", response_text, metadata={"artifacts": artifacts})
+        self._append_to_session("agent", response_text, metadata={"artifacts": artifacts, "route": route})
         self._turn_count += 1
 
         # 9. Auto-save user model periodically
@@ -759,9 +767,23 @@ class ConversationEngine:
 
     # ── 5-Level Context Builder ──────────────────────────────────
 
-    def _build_conversation_prompt(self, user_message: str, phase: str = "ongoing") -> str:
-        """Build the full 5-level context prompt for the LLM."""
+    def _build_conversation_prompt(self, user_message: str, phase: str = "ongoing", route: str | None = None) -> str:
+        """Build the full 5-level context prompt for the LLM.
+
+        Args:
+            user_message: The user's message text
+            phase: Conversation phase (onboarding, early, ongoing, planning)
+            route: Optional message route type from router for budget optimization
+        """
         budgets = TOKEN_BUDGETS.get(phase, TOKEN_BUDGETS["ongoing"])
+
+        # Apply route-specific budget overrides if available
+        if route:
+            try:
+                from src.agent.router import get_budget_overrides
+                budgets = get_budget_overrides(route, budgets)
+            except Exception:
+                pass
         parts = []
 
         # Level 2: User Model Summary
