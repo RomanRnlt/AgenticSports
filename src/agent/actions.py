@@ -121,19 +121,58 @@ def _handle_evaluate_trajectory(ctx: dict) -> dict:
 
 
 def _handle_update_beliefs(ctx: dict) -> dict:
-    """Update beliefs from assessment evidence."""
+    """Update beliefs from assessment evidence and record outcomes.
+
+    P6 enhancement: compares assessment data against existing beliefs to
+    record confirmed/contradicted outcomes, updating confidence and utility.
+    """
     user_model = ctx.get("user_model")
     assessment = ctx.get("assessment")
 
     if not user_model or not assessment:
         return {"beliefs_updated": False, "reason": "missing user_model or assessment"}
 
-    # Extract observations as potential belief updates
-    observations = assessment.get("assessment", {}).get("observations", [])
-    if observations:
+    assess_data = assessment.get("assessment", {})
+    observations = assess_data.get("observations", [])
+    compliance = assess_data.get("compliance")
+
+    outcomes_recorded = 0
+
+    # Record outcomes for active beliefs based on assessment evidence
+    active_beliefs = user_model.get_active_beliefs()
+    if compliance is not None and active_beliefs:
+        obs_text = " ".join(observations).lower()
+
+        for belief in active_beliefs:
+            belief_text = belief["text"].lower()
+
+            # Check if any observation references this belief's topic
+            # Simple heuristic: check for keyword overlap
+            belief_words = set(belief_text.split()) - {"the", "a", "an", "is", "to", "and", "or", "in", "on", "for"}
+            overlap = sum(1 for w in belief_words if w in obs_text)
+
+            if overlap >= 2:
+                # This belief is relevant to the current assessment
+                if compliance >= 0.7:
+                    user_model.record_outcome(
+                        belief["id"], "confirmed",
+                        detail=f"Assessment compliance {compliance:.0%}",
+                    )
+                else:
+                    user_model.record_outcome(
+                        belief["id"], "contradicted",
+                        detail=f"Assessment compliance {compliance:.0%}",
+                    )
+                outcomes_recorded += 1
+
+    if observations or outcomes_recorded > 0:
         user_model.save()
 
-    return {"beliefs_updated": True, "observations_count": len(observations)}
+    return {
+        "beliefs_updated": True,
+        "observations_count": len(observations),
+        "outcomes_recorded": outcomes_recorded,
+    }
 
 
 def _handle_query_episodes(ctx: dict) -> dict:

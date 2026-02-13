@@ -177,8 +177,9 @@ def retrieve_relevant_episodes(
 ) -> list[dict]:
     """Retrieve episodes relevant to current planning context.
 
-    Uses keyword matching + recency bias for MVP.
-    Scores each episode based on keyword overlap with current context.
+    Uses keyword matching (0.4) + recency (0.3) + utility (0.3) scoring.
+    Episodes with proven lessons (high utility) are preferred over
+    recent-but-unproven episodes (P6: active memory).
     """
     if not episodes:
         return []
@@ -188,8 +189,6 @@ def retrieve_relevant_episodes(
 
     scored = []
     for i, ep in enumerate(episodes):
-        score = 0.0
-
         # Keyword matching across observations, lessons, patterns
         ep_text = " ".join(
             ep.get("key_observations", [])
@@ -197,14 +196,22 @@ def retrieve_relevant_episodes(
             + ep.get("patterns_detected", [])
         ).lower()
 
+        keyword_score = 0.0
         for kw in context_keywords:
             if kw in ep_text:
-                score += 1.0
+                keyword_score += 1.0
+        # Normalize keyword score to 0-1 range
+        max_kw = max(len(context_keywords), 1)
+        keyword_score = min(1.0, keyword_score / max_kw)
 
-        # Recency bias: more recent episodes score higher
-        # episodes are already sorted most-recent-first
-        recency_bonus = max(0, (len(episodes) - i)) / len(episodes)
-        score += recency_bonus * 2.0
+        # Recency: more recent episodes score higher (already sorted most-recent-first)
+        recency_score = max(0, (len(episodes) - i)) / len(episodes)
+
+        # Utility: episodes with proven lessons score higher (P6)
+        utility_score = ep.get("utility", 0.0)
+
+        # Weighted combination
+        score = keyword_score * 0.4 + recency_score * 0.3 + utility_score * 0.3
 
         scored.append((score, ep))
 
@@ -212,6 +219,47 @@ def retrieve_relevant_episodes(
     scored.sort(key=lambda x: x[0], reverse=True)
 
     return [ep for _, ep in scored[:max_results]]
+
+
+def record_episode_outcome(
+    episode_id: str,
+    utility_delta: float,
+    storage_dir: str | Path | None = None,
+) -> dict | None:
+    """Update an episode's utility score based on coaching outcome.
+
+    Args:
+        episode_id: The episode ID to update.
+        utility_delta: Amount to add to utility (positive = lesson was useful).
+        storage_dir: Where episodes are stored.
+
+    Returns:
+        Updated episode dict, or None if not found.
+    """
+    src = Path(storage_dir) if storage_dir else EPISODES_DIR
+    if not src.exists():
+        return None
+
+    for path in src.glob("ep_*.json"):
+        try:
+            ep = json.loads(path.read_text())
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        if ep.get("id") == episode_id:
+            ep.setdefault("utility", 0.0)
+            ep.setdefault("referenced_count", 0)
+            ep.setdefault("outcome_validated", False)
+
+            ep["utility"] = max(0.0, min(1.0, ep["utility"] + utility_delta))
+            ep["referenced_count"] += 1
+            if utility_delta > 0:
+                ep["outcome_validated"] = True
+
+            path.write_text(json.dumps(ep, indent=2))
+            return ep
+
+    return None
 
 
 META_REFLECTION_PROMPT = """\

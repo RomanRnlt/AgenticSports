@@ -115,6 +115,11 @@ class UserModel:
             "active": True,
             "superseded_by": None,
             "embedding": embedding,
+            # Outcome tracking fields (P6: active memory)
+            "utility": 0.0,
+            "outcome_count": 0,
+            "last_outcome": None,
+            "outcome_history": [],
         }
         self.beliefs.append(belief)
         self.meta["updated_at"] = now
@@ -173,6 +178,71 @@ class UserModel:
             if b["confidence"] < min_confidence:
                 continue
             results.append(b)
+        return results
+
+    # ── Outcome Recording (P6: active memory) ───────────────────
+
+    def record_outcome(
+        self,
+        belief_id: str,
+        outcome: str,
+        detail: str = "",
+    ) -> dict | None:
+        """Record an outcome for a belief, updating confidence and utility.
+
+        Args:
+            belief_id: ID of the belief to update.
+            outcome: "confirmed" or "contradicted".
+            detail: Optional description of the evidence.
+
+        Returns:
+            The updated belief, or None if not found.
+        """
+        for belief in self.beliefs:
+            if belief["id"] == belief_id and belief["active"]:
+                now = _now_iso()
+
+                # Ensure outcome fields exist (backwards compatibility)
+                belief.setdefault("utility", 0.0)
+                belief.setdefault("outcome_count", 0)
+                belief.setdefault("last_outcome", None)
+                belief.setdefault("outcome_history", [])
+
+                # Update confidence based on outcome
+                if outcome == "confirmed":
+                    belief["confidence"] = min(1.0, belief["confidence"] + 0.05)
+                    belief["utility"] = min(1.0, belief["utility"] + 0.1)
+                elif outcome == "contradicted":
+                    belief["confidence"] = max(0.0, belief["confidence"] - 0.1)
+                    belief["utility"] = max(0.0, belief["utility"] - 0.05)
+
+                belief["outcome_count"] += 1
+                belief["last_outcome"] = outcome
+                belief["last_confirmed"] = now
+                belief["outcome_history"].append({
+                    "date": _today_iso(),
+                    "type": outcome,
+                    "detail": detail,
+                })
+
+                self.meta["updated_at"] = now
+                return belief
+        return None
+
+    def get_high_utility_beliefs(
+        self,
+        min_utility: float = 0.3,
+        min_confidence: float = 0.6,
+    ) -> list[dict]:
+        """Retrieve active beliefs with proven utility from outcome tracking."""
+        results = []
+        for b in self.beliefs:
+            if not b["active"]:
+                continue
+            utility = b.get("utility", 0.0)
+            if utility >= min_utility and b["confidence"] >= min_confidence:
+                results.append(b)
+        results.sort(key=lambda b: b.get("utility", 0.0), reverse=True)
         return results
 
     # ── User Model Summary (for prompt injection) ────────────────
@@ -433,7 +503,10 @@ class UserModel:
         return self._model_path
 
     def load(self) -> "UserModel":
-        """Load user model from disk. Returns self for chaining."""
+        """Load user model from disk. Returns self for chaining.
+
+        Backfills missing outcome fields on old beliefs for backwards compatibility.
+        """
         if not self._model_path.exists():
             raise FileNotFoundError(f"No user model found at {self._model_path}")
 
@@ -441,6 +514,14 @@ class UserModel:
         self.structured_core = data.get("structured_core", self.structured_core)
         self.beliefs = data.get("beliefs", [])
         self.meta = data.get("meta", self.meta)
+
+        # Backfill outcome fields for beliefs created before P6
+        for belief in self.beliefs:
+            belief.setdefault("utility", 0.0)
+            belief.setdefault("outcome_count", 0)
+            belief.setdefault("last_outcome", None)
+            belief.setdefault("outcome_history", [])
+
         return self
 
     @classmethod
