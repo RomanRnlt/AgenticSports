@@ -50,7 +50,7 @@ class PlanEvaluation:
 
 
 EVALUATION_SYSTEM_PROMPT = """\
-You are evaluating a training plan for an endurance athlete. Score each criterion 0-100.
+You are evaluating a training plan for an athlete (any sport). Score each criterion 0-100.
 
 Be STRICT — a perfect plan is rare. Common issues to penalize:
 - Sessions without specific pace/HR/power targets (generic "easy run" with no zones)
