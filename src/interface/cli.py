@@ -451,8 +451,132 @@ def run_status() -> None:
 def run_chat() -> None:
     """Interactive chat mode with conversational coaching.
 
-    If no user model exists, starts in onboarding mode.
-    If a user model exists, starts in ongoing coaching mode.
+    When AGENT_V3=true: Uses the new agent loop (v3.0 architecture).
+    Otherwise: Falls back to v2.0 onboarding/conversation pipeline.
+    """
+    import os
+
+    use_v3 = os.environ.get("AGENT_V3", "").lower() in ("true", "1", "yes")
+
+    if use_v3:
+        _run_chat_v3()
+    else:
+        _run_chat_v2()
+
+
+def _run_chat_v3() -> None:
+    """v3.0 agent loop -- Claude Code architecture for fitness coaching.
+
+    Activated when AGENT_V3=true. The agent decides what to do via tools.
+    Includes: startup optimization (Gap 5), plan display (Gap 6),
+    import awareness (Gap 7), proactive start (Gap 8).
+    """
+    import json as _json
+    from src.agent.agent_loop import AgentLoop
+    from src.agent.startup_context import build_startup_context
+
+    imported = run_import()
+    user_model = UserModel.load_or_create()
+
+    # Pre-compute startup context (Gap 5 -- instant greeting)
+    startup_ctx = build_startup_context(user_model, imported=imported)
+
+    # Progress callback for tool visibility
+    def on_progress(event_type: str, detail: str):
+        if event_type == "tool_call":
+            console.print(f"  [dim]-> {detail}[/dim]")
+        elif event_type == "tool_result":
+            console.print(f"  [dim]   {detail[:120]}[/dim]")
+        elif event_type == "tool_error":
+            console.print(f"  [yellow]   ! {detail}[/yellow]")
+
+    agent = AgentLoop(
+        user_model=user_model,
+        on_progress=on_progress,
+        startup_context=startup_ctx,
+    )
+    agent.start_session()
+
+    # Startup greeting
+    is_new = not user_model.structured_core.get("sports")
+    if is_new:
+        greeting = (
+            "Welcome to ReAgt! I'm your adaptive training coach -- "
+            "I work with athletes across all sports, from running and cycling to basketball, "
+            "swimming, CrossFit, and beyond.\n\n"
+            "Tell me about yourself -- what's your name, what sport(s) do you do, "
+            "what are you training for, and how does your typical training week look?"
+        )
+    else:
+        # Proactive session-start analysis (Gap 8)
+        startup_result = agent.process_message(
+            "[SYSTEM] New session started. Greet the athlete by name using the "
+            "pre-loaded session context. If there are new imports or recent "
+            "activities, briefly mention notable observations (volume changes, "
+            "new PRs, missed sessions). Keep it concise and warm. "
+            "Check for any notable changes worth mentioning."
+        )
+        greeting = startup_result.response_text
+
+    console.print(Panel(escape(greeting), title="ReAgt Coach", style="blue"))
+    agent.inject_context("model", greeting)
+
+    # Main loop
+    while True:
+        try:
+            user_input = Prompt.ask("\n[bold]You[/bold]")
+        except (KeyboardInterrupt, EOFError):
+            user_input = "exit"
+
+        if user_input.lower().strip() in ("exit", "quit", "q"):
+            user_model.save()
+            console.print("[dim]Session ended. See you next time![/dim]")
+            break
+
+        if user_input.lower().strip() == "plan":
+            user_input = "Please create a new training plan for me."
+
+        # Process through agent loop
+        console.print()
+        result = agent.process_message(user_input)
+
+        # Display response
+        console.print(Panel(escape(result.response_text), title="ReAgt Coach", style="blue"))
+
+        # Plan display integration (Gap 6)
+        for turn in result.turns:
+            if turn.tool_name == "save_plan" and turn.content:
+                try:
+                    save_result = _json.loads(turn.content)
+                    if save_result.get("saved"):
+                        plan_path = save_result.get("path")
+                        if plan_path:
+                            plan_data = _json.loads(Path(plan_path).read_text())
+                            display_plan(plan_data)
+                except (_json.JSONDecodeError, OSError, KeyError):
+                    pass
+
+        # Show tool usage stats
+        if result.tool_calls_made > 0:
+            console.print(
+                f"  [dim]({result.tool_calls_made} tool calls, "
+                f"{result.total_duration_ms}ms)[/dim]"
+            )
+
+        # If onboarding just completed, offer to create a plan (Gap 4b)
+        if result.onboarding_just_completed:
+            console.print(
+                "\n[yellow]Profile complete! I can create your first training plan now.[/yellow]"
+            )
+
+    user_model.save()
+
+
+def _run_chat_v2() -> None:
+    """v2.0 fallback chat flow when AGENT_V3 is not set.
+
+    Preserves the existing OnboardingEngine + ConversationEngine flow
+    so that old tests continue to pass (Gap 10).
     """
     from src.agent.onboarding import OnboardingEngine
     from src.agent.conversation import ConversationEngine
