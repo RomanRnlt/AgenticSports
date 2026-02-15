@@ -21,7 +21,7 @@ SESSIONS_DIR = DATA_DIR / "sessions"
 # ── Dynamic Token Budgets (ACL 2025: Token-Budget-Aware Reasoning) ────
 # Approximate char limits (1 token ~ 4 chars)
 TOKEN_BUDGETS = {
-    "onboarding": {"system": 6000, "model": 1200, "activity": 0,    "cross": 0,    "rolling": 1200, "recent": 8000},
+    "onboarding": {"system": 12000,"model": 1200, "activity": 0,    "cross": 0,    "rolling": 1200, "recent": 8000},
     "early":      {"system": 4800, "model": 4000, "activity": 3000, "cross": 2000, "rolling": 2000, "recent": 10000},
     "ongoing":    {"system": 3200, "model": 8000, "activity": 4000, "cross": 4000, "rolling": 3200, "recent": 16000},
     "planning":   {"system": 3200, "model": 10000,"activity": 4000, "cross": 6000, "rolling": 2000, "recent": 12000},
@@ -65,6 +65,12 @@ CONVERSATION_RESPONSE_SCHEMA = {
                         "event": {"type": "STRING", "nullable": True},
                         "target_date": {"type": "STRING", "nullable": True},
                         "target_time": {"type": "STRING", "nullable": True},
+                        "goal_type": {
+                            "type": "STRING",
+                            "nullable": True,
+                            "enum": ["race_target", "performance_target", "routine", "general"],
+                            "description": "REQUIRED when no specific race/event. 'race_target' for specific races, 'performance_target' for improvement goals (e.g. get faster/stronger), 'routine' for regular training maintenance, 'general' for general fitness/health.",
+                        },
                     },
                     "nullable": True,
                 },
@@ -80,7 +86,11 @@ CONVERSATION_RESPONSE_SCHEMA = {
                 "constraints": {
                     "type": "OBJECT",
                     "properties": {
-                        "training_days_per_week": {"type": "INTEGER", "nullable": True},
+                        "training_days_per_week": {
+                            "type": "INTEGER",
+                            "nullable": True,
+                            "description": "Total training days per week. SUM ALL sessions: team practices + personal training + games/competitions. Use upper range for ranges (e.g. '2-3x' counts as 3).",
+                        },
                         "max_session_minutes": {
                             "type": "INTEGER",
                             "nullable": True,
@@ -440,13 +450,27 @@ IMPORTANT - Belief categories must be ACCURATE. Use the correct category for eac
 Do NOT default everything to "preference". Choose the MOST SPECIFIC category.
 
 ## Fitness Derivation (Critical)
-When the athlete mentions ANY performance data, derive fitness metrics:
-- Race times (e.g., "10km in 42:30", "half marathon in 1:42") → estimate VO2max and threshold pace
+When the athlete mentions ANY performance data, ALWAYS derive fitness metrics. Do NOT skip this step.
+Use the Jack Daniels VDOT table or equivalent formulas to estimate VO2max from ANY race time:
+
+Running race time examples (approximate VO2max):
+- 5K 24:00 → VO2max ~42 | 5K 20:00 → ~50 | 5K 18:00 → ~55
+- 10K 42:30 → VO2max ~52 | 10K 50:00 → ~44 | 10K 38:00 → ~56
+- Half marathon (HM/Halbmarathon) 1:38 → VO2max ~48 | HM 1:42 → ~46 | HM 1:30 → ~53
+- Marathon 3:30 → VO2max ~47 | Marathon 3:00 → ~54
+- ANY running race distance and time → estimate VO2max using Jack Daniels VDOT table
+
+Non-running performance data:
 - Cycling FTP (e.g., "FTP 260W at 75kg") → estimate VO2max from FTP (approximate: VO2max ≈ FTP_per_kg * 10.8 + 7)
-- Known paces or power data → derive threshold estimates
+- Swimming 1500m freestyle times → estimate VO2max: 17:30 → ~42, 16:00 → ~48, 20:00 → ~35
+  (Swimming VO2max approximation: VO2max ≈ 1500 / time_in_seconds * 450, capped at sport-specific ceiling)
+- Rowing 2000m erg times → estimate VO2max similarly
+
+Rules:
 - Put these estimates into structured_core_updates as fitness.estimated_vo2max and fitness.threshold_pace_min_km
-- For cyclists without running data, threshold_pace_min_km can remain null, but VO2max should be estimated from cycling power
+- For non-runners (cyclists, swimmers), threshold_pace_min_km can remain null, but VO2max MUST be estimated
 - Also estimate appropriate HR zones if resting/max HR is known
+- When in doubt, ALWAYS estimate VO2max. A rough estimate is better than null.
 
 ## Date Handling (Critical)
 When the athlete mentions dates, ALWAYS convert to ISO format (YYYY-MM-DD) for structured_core_updates:
@@ -469,6 +493,15 @@ Trigger a cycle when:
 - The athlete reports something that warrants re-assessment
 
 Do NOT trigger for casual conversation, status updates, or simple questions.
+
+## Language Rule (Critical)
+Detect the language of the athlete's messages and ALWAYS respond in that SAME language.
+- German input -> German response (even technical terms in German where natural)
+- English input -> English response
+- NEVER switch languages mid-response
+- NEVER default to English when the athlete writes in another language
+- When unsure, default to the language of the athlete's most recent message
+- Universal terms like "VO2max", "TRIMP", "FTP" can stay as-is, but frame all sentences in the athlete's language
 
 ## Response Format
 You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no code fences.
@@ -495,12 +528,37 @@ Rules for the JSON:
 - extracted_beliefs: array of 0+ beliefs. Empty array if nothing to extract.
 - structured_core_updates: object mapping dot-notation field paths to values. Empty object if no updates.
   Valid fields: name, sports, goal.event, goal.target_date, goal.target_time,
+  goal.goal_type (one of: "race_target", "performance_target", "routine", "general"),
   fitness.estimated_vo2max, fitness.threshold_pace_min_km, fitness.weekly_volume_km,
   constraints.training_days_per_week, constraints.max_session_minutes, constraints.available_sports
+
+CRITICAL - goal.goal_type extraction:
+  You MUST ALWAYS set goal.goal_type in structured_core_updates when the athlete reveals their goals:
+  - "race_target": training for a specific race/event (marathon, triathlon, Gran Fondo, swim meet, etc.)
+  - "performance_target": wants to improve at their sport (get faster, stronger, better endurance, improve vertical jump, etc.)
+  - "routine": wants to maintain regular training without a specific performance goal
+  - "general": general fitness, health, weight loss, staying active
+  If the athlete says "I want to get faster" or "improve my game" → "performance_target"
+  If the athlete says "just stay fit" or "healthy lifestyle" → "general" or "routine"
+  Do NOT leave goal_type empty/null when the athlete has stated any kind of goal or motivation.
+
+CRITICAL - constraints.training_days_per_week extraction:
+  COUNT the total training days per week from ALL sources the athlete mentions:
+  - Team practices, club training sessions, school sports
+  - Personal training sessions (running, gym, swimming, etc.)
+  - Weekend activities (games, long runs, rides)
+  SUM them all up. Examples:
+  - "3x running + 1x swimming + 2-3x cycling" → 7 (use the upper range)
+  - "2-3x team practice + game on weekend + 2-3x extra" → 6 (2-3 + 1 + 2-3, use reasonable total)
+  - "I train 5 days a week" → 5
+  Do NOT leave training_days_per_week null when the athlete has described their weekly schedule.
+
 - trigger_cycle: true only when a state machine cycle should run
 - cycle_reason: short explanation if trigger_cycle is true, null otherwise
 - onboarding_complete: true ONLY when you have gathered enough information to generate a training plan
-  (minimum: sports, goal event, target date, training days per week)
+  (minimum: sports, training days per week, AND either a goal event OR a goal_type).
+  Athletes without a specific race can still complete onboarding if goal_type is set
+  (e.g., "routine" for maintenance, "general" for general fitness, "performance_target" for improvement).
 """
 
 ROLLING_SUMMARY_PROMPT = """\
@@ -973,9 +1031,11 @@ class ConversationEngine:
         # Check if onboarding
         has_sports = bool(core.get("sports"))
         has_event = bool(core.get("goal", {}).get("event"))
+        has_goal_type = bool(core.get("goal", {}).get("goal_type"))
         has_days = bool(core.get("constraints", {}).get("training_days_per_week"))
 
-        if not (has_sports and has_event and has_days):
+        has_goal = has_event or has_goal_type
+        if not (has_sports and has_goal and has_days):
             return "onboarding"
 
         # Check if planning mode

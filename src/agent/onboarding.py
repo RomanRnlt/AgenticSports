@@ -65,6 +65,10 @@ class OnboardingEngine:
         The LLM decides this via trigger_cycle/onboarding_complete in its
         structured response. We also check the minimum required fields
         as a safety net for plan generation.
+
+        Athletes with a specific race event satisfy the goal requirement
+        via has_event. Athletes with routine/general fitness goals (no
+        specific event) satisfy it via has_goal_type instead.
         """
         if self._plan_triggered:
             return True
@@ -72,9 +76,11 @@ class OnboardingEngine:
         core = self.user_model.structured_core
         has_sports = bool(core.get("sports"))
         has_event = bool(core.get("goal", {}).get("event"))
+        has_goal_type = bool(core.get("goal", {}).get("goal_type"))
         has_days = bool(core.get("constraints", {}).get("training_days_per_week"))
 
-        return has_sports and has_event and has_days
+        has_goal = has_event or has_goal_type
+        return has_sports and has_goal and has_days
 
     def get_onboarding_prompt(self) -> str:
         """Return the opening message for onboarding."""

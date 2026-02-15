@@ -8,7 +8,7 @@ import re
 from datetime import date, datetime
 
 
-def plan_respects_sport_distribution(plan: dict, beliefs: list[dict]) -> tuple[bool, str]:
+def plan_respects_sport_distribution(plan: dict, beliefs: list[dict], structured_core: dict | None = None) -> tuple[bool, str]:
     """Plan must include sessions matching the user's stated sport distribution.
 
     Generically parses scheduling beliefs for patterns like "Wants Nx <sport> per week"
@@ -47,7 +47,31 @@ def plan_respects_sport_distribution(plan: dict, beliefs: list[dict]) -> tuple[b
             issues.append(f"Expected {min_c}-{max_c}x {sport} but got {actual}")
 
     # If no scheduling beliefs parsed, fall back to checking multi-sport coverage
+    # Only flag single-sport plans if the user's structured_core actually lists multiple sports
     if not expected_counts:
+        user_sports = []
+        if structured_core:
+            user_sports = [s.lower() for s in structured_core.get("sports", [])]
+
+        # Exclude sports that are the user's job/profession (constraint), not training targets.
+        # e.g. a yoga teacher who runs: yoga is her job, only running should be planned.
+        _job_keywords = [
+            "job", "beruf", "unterricht", "teaches", "instructor", "lehrerin",
+            "lehrer", "trainer", "coach", "work", "arbeit", "profession",
+        ]
+        active_sports = []
+        for sport in user_sports:
+            # Check if any belief mentions this sport alongside a job keyword
+            is_job_sport = False
+            for b in beliefs:
+                bt = b.get("text", "").lower()
+                if sport in bt and any(kw in bt for kw in _job_keywords):
+                    is_job_sport = True
+                    break
+            if not is_job_sport:
+                active_sports.append(sport)
+        is_multi_sport_user = len(active_sports) >= 2
+
         sport_mentions: set[str] = set()
         for b in beliefs:
             text = b.get("text", "").lower()
@@ -55,7 +79,7 @@ def plan_respects_sport_distribution(plan: dict, beliefs: list[dict]) -> tuple[b
             if any(kw in text for kw in ["session", "mal", "times", "per week"]):
                 sport_mentions.add("multi")
         real_sports = [s for s in sports_in_plan if s not in ("rest", "recovery", "general_fitness")]
-        if sport_mentions and len(real_sports) < 2:
+        if sport_mentions and is_multi_sport_user and len(real_sports) < 2:
             issues.append(f"Only {len(real_sports)} sport types in plan, expected multi-sport")
 
     passed = len(issues) == 0
@@ -120,12 +144,13 @@ def fitness_fields_populated(structured_core: dict, beliefs: list[dict] | None =
 
     # Only require threshold pace if athlete has running performance data in beliefs
     # (Don't require it for cyclists who also run but haven't provided running times)
-    # Be careful not to match "Radmarathon" as running data
+    # Be careful not to match "Radmarathon" or swimming times as running data
     if threshold is None and beliefs:
         running_perf_keywords = ["10km", "5km", "10k ", "5k ", "half marathon", "halbmarathon", "laufzeit", "run time", "bestzeit", "lauf bestzeit"]
+        non_running_keywords = ["rad", "swim", "schwimm", "freistil", "freestyle", "pool", "kraul", "brust", "backstroke"]
         has_running_performance = any(
             any(kw in b.get("text", "").lower() for kw in running_perf_keywords)
-            and "rad" not in b.get("text", "").lower()  # exclude cycling "Radmarathon"
+            and not any(nk in b.get("text", "").lower() for nk in non_running_keywords)
             for b in beliefs
         )
         if has_running_performance:

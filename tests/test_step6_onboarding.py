@@ -214,6 +214,44 @@ class TestOnboardingComplete:
         )
         assert engine.is_onboarding_complete() is False
 
+    def test_complete_with_goal_type_no_event(self, empty_model, tmp_dirs):
+        """Athletes with a goal_type but no specific race event can complete onboarding."""
+        _, sessions_dir = tmp_dirs
+        empty_model.update_structured_core("sports", ["soccer", "swimming"])
+        empty_model.update_structured_core("goal.goal_type", "general")
+        empty_model.update_structured_core("constraints.training_days_per_week", 6)
+        engine = OnboardingEngine(
+            user_model=empty_model,
+            sessions_dir=sessions_dir,
+            data_dir=tmp_dirs[0].parent,
+        )
+        assert engine.is_onboarding_complete() is True
+
+    def test_complete_with_routine_goal_type(self, empty_model, tmp_dirs):
+        """Athletes with routine goal_type complete onboarding without event."""
+        _, sessions_dir = tmp_dirs
+        empty_model.update_structured_core("sports", ["running"])
+        empty_model.update_structured_core("goal.goal_type", "routine")
+        empty_model.update_structured_core("constraints.training_days_per_week", 4)
+        engine = OnboardingEngine(
+            user_model=empty_model,
+            sessions_dir=sessions_dir,
+            data_dir=tmp_dirs[0].parent,
+        )
+        assert engine.is_onboarding_complete() is True
+
+    def test_not_complete_missing_event_and_goal_type(self, empty_model, tmp_dirs):
+        """Without both event and goal_type, onboarding is not complete."""
+        _, sessions_dir = tmp_dirs
+        empty_model.update_structured_core("sports", ["running"])
+        empty_model.update_structured_core("constraints.training_days_per_week", 4)
+        engine = OnboardingEngine(
+            user_model=empty_model,
+            sessions_dir=sessions_dir,
+            data_dir=tmp_dirs[0].parent,
+        )
+        assert engine.is_onboarding_complete() is False
+
 
 # ── End Session ──────────────────────────────────────────────────
 
