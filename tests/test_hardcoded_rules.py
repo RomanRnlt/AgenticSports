@@ -297,23 +297,3 @@ class TestFatigueDetection:
 
     def test_no_activities(self):
         assert _detect_high_fatigue([], []) is False
-
-
-# ── Group E: Infrastructure Constants (Kept) ─────────────────────────
-
-class TestInfrastructureConstantsKept:
-    """Verify infrastructure constants are kept (not coaching logic)."""
-
-    def test_token_budgets_exist(self):
-        from src.agent.conversation import TOKEN_BUDGETS
-        assert isinstance(TOKEN_BUDGETS, dict)
-        # TOKEN_BUDGETS is phase-keyed (onboarding, early, planning, ongoing)
-        assert len(TOKEN_BUDGETS) >= 3
-
-    def test_rolling_summary_interval_exists(self):
-        from src.agent.conversation import ROLLING_SUMMARY_INTERVAL
-        assert isinstance(ROLLING_SUMMARY_INTERVAL, int)
-
-    def test_recent_turns_count_exists(self):
-        from src.agent.conversation import RECENT_TURNS_COUNT
-        assert isinstance(RECENT_TURNS_COUNT, int)

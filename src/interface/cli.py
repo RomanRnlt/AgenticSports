@@ -11,7 +11,6 @@ from rich.markup import escape
 
 from src.agent.coach import generate_plan, save_plan
 from src.agent.proactive import check_proactive_triggers, format_proactive_message
-from src.agent.state_machine import AgentCore
 from src.agent.trajectory import assess_trajectory
 from src.memory.episodes import list_episodes
 from src.memory.profile import create_profile, save_profile, load_profile
@@ -258,82 +257,16 @@ def run_import() -> list[dict]:
 
 
 def run_assessment() -> None:
-    """Run a full assessment cycle: compare recent activities against current plan."""
-    import json
+    """Run a full assessment cycle (deprecated -- use chat mode instead).
 
-    run_import()
-
-    try:
-        profile = load_profile()
-    except FileNotFoundError:
-        console.print("[red]No athlete profile found. Run onboarding first.[/red]")
-        return
-
-    # Find the latest plan
-    plans_dir = Path(__file__).parent.parent.parent / "data" / "plans"
-    plan_files = sorted(plans_dir.glob("plan_*.json")) if plans_dir.exists() else []
-    if not plan_files:
-        console.print("[red]No training plan found. Generate a plan first.[/red]")
-        return
-
-    latest_plan = json.loads(plan_files[-1].read_text())
-    console.print(f"[yellow]Using plan: {plan_files[-1].name}[/yellow]")
-
-    # Get recent activities
-    activities = list_activities()
-    if not activities:
-        console.print("[red]No activities found. Import some training data first.[/red]")
-        return
-
-    console.print(f"[yellow]Analyzing {len(activities)} activities...[/yellow]\n")
-
-    # Run the agent cycle
-    agent = AgentCore()
-    try:
-        result = agent.run_cycle(profile, latest_plan, activities)
-    except Exception as e:
-        console.print(f"[red]Assessment failed: {e}[/red]")
-        return
-
-    # Display assessment
-    assessment = result.get("assessment", {}).get("assessment", {})
-    console.print(Panel(
-        f"Compliance: [cyan]{assessment.get('compliance', 'N/A')}[/cyan]\n"
-        f"Fitness trend: [cyan]{assessment.get('fitness_trend', 'N/A')}[/cyan]\n"
-        f"Fatigue: [cyan]{assessment.get('fatigue_level', 'N/A')}[/cyan]\n"
-        f"Injury risk: [cyan]{assessment.get('injury_risk', 'N/A')}[/cyan]",
-        title="Training Assessment",
-        style="blue",
-    ))
-
-    observations = assessment.get("observations", [])
-    if observations:
-        console.print("\n[bold]Observations:[/bold]")
-        for obs in observations:
-            console.print(f"  - {obs}")
-
-    # Display autonomy results
-    autonomy = result.get("autonomy_result", {})
-    auto_applied = autonomy.get("auto_applied", [])
-    proposals = autonomy.get("proposals", [])
-
-    if auto_applied:
-        console.print(f"\n[green]Auto-applied adjustments ({len(auto_applied)}):[/green]")
-        for adj in auto_applied:
-            console.print(f"  - {adj.get('description', '?')}")
-
-    if proposals:
-        console.print(f"\n[yellow]Proposed adjustments ({len(proposals)}):[/yellow]")
-        for adj in proposals:
-            impact = adj.get("classified_impact", adj.get("impact", "?"))
-            console.print(f"  [{impact}] {adj.get('description', '?')}")
-
-    # Save adjusted plan
-    adjusted_plan = result.get("adjusted_plan")
-    if adjusted_plan:
-        path = save_plan(adjusted_plan)
-        console.print(f"\n[green]Adjusted plan saved: {path}[/green]")
-        display_plan(adjusted_plan)
+    The V2 AgentCore pipeline has been removed. Assessment is now handled
+    by the agent loop in chat mode, which can analyse activities, compare
+    them against the current plan, and propose adjustments conversationally.
+    """
+    console.print(
+        "[yellow]The standalone --assess command has been retired.[/yellow]\n"
+        "Use [bold]--chat[/bold] instead and ask the agent to assess your recent training."
+    )
 
 
 def _load_latest_plan() -> dict | None:
@@ -449,27 +382,16 @@ def run_status() -> None:
 
 
 def run_chat() -> None:
-    """Interactive chat mode with conversational coaching.
-
-    When AGENT_V3=true: Uses the new agent loop (v3.0 architecture).
-    Otherwise: Falls back to v2.0 onboarding/conversation pipeline.
-    """
-    import os
-
-    use_v3 = os.environ.get("AGENT_V3", "").lower() in ("true", "1", "yes")
-
-    if use_v3:
-        _run_chat_v3()
-    else:
-        _run_chat_v2()
+    """Interactive chat mode with conversational coaching."""
+    _run_chat()
 
 
-def _run_chat_v3() -> None:
-    """v3.0 agent loop -- Claude Code architecture for fitness coaching.
+def _run_chat() -> None:
+    """Agent loop for interactive fitness coaching.
 
-    Activated when AGENT_V3=true. The agent decides what to do via tools.
-    Includes: startup optimization (Gap 5), plan display (Gap 6),
-    import awareness (Gap 7), proactive start (Gap 8).
+    The agent decides what to do via tools.
+    Includes: startup optimization, plan display, import awareness,
+    and proactive session-start analysis.
     """
     import json as _json
     from src.agent.agent_loop import AgentLoop
@@ -570,128 +492,6 @@ def _run_chat_v3() -> None:
             )
 
     user_model.save()
-
-
-def _run_chat_v2() -> None:
-    """v2.0 fallback chat flow when AGENT_V3 is not set.
-
-    Preserves the existing OnboardingEngine + ConversationEngine flow
-    so that old tests continue to pass (Gap 10).
-    """
-    from src.agent.onboarding import OnboardingEngine
-    from src.agent.conversation import ConversationEngine
-
-    imported = run_import()
-
-    user_model = UserModel.load_or_create()
-    is_new_user = not user_model.structured_core.get("sports")
-
-    if is_new_user:
-        # Onboarding mode
-        engine = OnboardingEngine(user_model=user_model)
-        greeting = engine.start()
-        console.print(Panel(escape(greeting), title="ReAgt Coach", style="blue"))
-
-        while True:
-            try:
-                user_input = Prompt.ask("\n[bold]You[/bold]")
-            except (KeyboardInterrupt, EOFError):
-                user_input = "exit"
-
-            if user_input.strip().lower() in ("exit", "quit", "q"):
-                engine.end_session()
-                user_model.save()
-                console.print("[dim]Session saved. See you next time![/dim]")
-                break
-
-            response = engine.process_message(user_input)
-            console.print(Panel(escape(response), title="ReAgt Coach", style="blue"))
-
-            if engine.is_onboarding_complete():
-                console.print(
-                    "\n[yellow]Great, I have enough to create your first plan![/yellow]"
-                )
-                profile = user_model.project_profile()
-                beliefs = user_model.get_active_beliefs(min_confidence=0.6)
-                activities = list_activities()
-                from src.memory.episodes import retrieve_relevant_episodes
-                _episodes = list_episodes(limit=10)
-                _relevant_eps = retrieve_relevant_episodes(
-                    {"goal": profile.get("goal", {}), "sports": profile.get("sports", [])},
-                    _episodes,
-                    max_results=5,
-                )
-                try:
-                    plan = generate_plan(
-                        profile, beliefs=beliefs, activities=activities,
-                        relevant_episodes=_relevant_eps,
-                    )
-                    path = save_plan(plan)
-                    console.print(f"[green]Plan saved to {path}[/green]\n")
-                    display_plan(plan)
-                except Exception as e:
-                    console.print(f"[red]Plan generation failed: {e}[/red]")
-
-                engine.end_session()
-                user_model.save()
-                console.print("[dim]Session saved. See you next time![/dim]")
-                break
-    else:
-        # Ongoing coaching mode
-        engine = ConversationEngine(user_model=user_model)
-        session_id = engine.start_session()
-
-        # Compose coherent coaching greeting
-        from src.agent.startup import compose_startup_greeting
-
-        plan = _load_latest_plan()
-
-        # Generate reflection if due (before greeting so results feed into it)
-        reflection_result = None
-        try:
-            from src.agent.reflection import check_and_generate_reflections
-            all_activities = list_activities()
-            reflection_result = check_and_generate_reflections(
-                user_model=user_model,
-                plan=plan,
-                activities=all_activities,
-            )
-            if reflection_result:
-                console.print("[dim]Training reflection generated.[/dim]")
-        except Exception as exc:
-            import logging as _log
-            _log.getLogger(__name__).warning("Reflection generation failed: %s", exc)
-
-        console.print("[dim]Analyzing your training...[/dim]")
-        greeting = compose_startup_greeting(
-            user_model=user_model,
-            plan=plan,
-            imported=imported,
-            reflection_result=reflection_result,
-        )
-
-        if not greeting:
-            greeting = "Welcome back! What's on your mind?"
-
-        console.print(Panel(escape(greeting), title="ReAgt Coach", style="blue"))
-
-        # Store greeting as first agent turn for conversation continuity
-        engine.inject_startup_greeting(greeting)
-
-        while True:
-            try:
-                user_input = Prompt.ask("\n[bold]You[/bold]")
-            except (KeyboardInterrupt, EOFError):
-                user_input = "exit"
-
-            if user_input.strip().lower() in ("exit", "quit", "q"):
-                engine.end_session()
-                user_model.save()
-                console.print("[dim]Session saved. See you next time![/dim]")
-                break
-
-            response = engine.process_message(user_input)
-            console.print(Panel(escape(response), title="ReAgt Coach", style="blue"))
 
 
 def main(args: list[str] | None = None):
