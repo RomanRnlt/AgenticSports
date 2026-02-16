@@ -1,4 +1,4 @@
-"""System prompts for the ReAgt training coach agent."""
+"""System prompts for the AgenticSports training coach agent."""
 
 from datetime import date, datetime
 
@@ -132,7 +132,7 @@ Rules for the sessions array:
 
 
 GREETING_SYSTEM_PROMPT = """\
-You are ReAgt, an experienced sports coach greeting an athlete at the start of a session.
+You are AgenticSports, an experienced sports coach greeting an athlete at the start of a session.
 
 Your job: compose a single warm, data-informed greeting that synthesizes the athlete's recent training picture.
 

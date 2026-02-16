@@ -1,4 +1,4 @@
-"""CLI interface for ReAgt using Rich."""
+"""CLI interface for AgenticSports using Rich."""
 
 import argparse
 from pathlib import Path
@@ -83,7 +83,7 @@ def _format_steps(steps: list[dict]) -> str:
 def onboard_athlete() -> dict:
     """Interactive CLI to collect athlete info and create a profile."""
     console.print(
-        Panel("[bold]Welcome to ReAgt[/bold] - Your Adaptive Training Coach", style="blue")
+        Panel("[bold]Welcome to AgenticSports[/bold] - Your Autonomous AI Coach", style="blue")
     )
 
     # Sports
@@ -361,7 +361,7 @@ def run_status() -> None:
         f"by {profile.get('goal', {}).get('target_date', '?')}\n"
         f"Activities: [cyan]{len(activities)}[/cyan] | "
         f"Episodes: [cyan]{len(episodes)}[/cyan]",
-        title="ReAgt Status",
+        title="AgenticSports Status",
         style="blue",
     ))
 
@@ -423,7 +423,7 @@ def _run_chat() -> None:
     is_new = not user_model.structured_core.get("sports")
     if is_new:
         greeting = (
-            "Welcome to ReAgt! I'm your adaptive training coach -- "
+            "Welcome to AgenticSports! I'm your autonomous AI coach -- "
             "I work with athletes across all sports, from running and cycling to basketball, "
             "swimming, CrossFit, and beyond.\n\n"
             "Tell me about yourself -- what's your name, what sport(s) do you do, "
@@ -440,7 +440,7 @@ def _run_chat() -> None:
         )
         greeting = startup_result.response_text
 
-    console.print(Panel(escape(greeting), title="ReAgt Coach", style="blue"))
+    console.print(Panel(escape(greeting), title="AgenticSports Coach", style="blue"))
     agent.inject_context("model", greeting)
 
     # Main loop
@@ -463,7 +463,7 @@ def _run_chat() -> None:
         result = agent.process_message(user_input)
 
         # Display response
-        console.print(Panel(escape(result.response_text), title="ReAgt Coach", style="blue"))
+        console.print(Panel(escape(result.response_text), title="AgenticSports Coach", style="blue"))
 
         # Plan display integration (Gap 6)
         for turn in result.turns:
@@ -497,8 +497,8 @@ def _run_chat() -> None:
 def main(args: list[str] | None = None):
     """Main CLI entry point with argument parsing."""
     parser = argparse.ArgumentParser(
-        prog="reagt",
-        description="ReAgt - Adaptive Training Agent for Endurance Athletes",
+        prog="agenticsports",
+        description="AgenticSports - Autonomous AI Sports Coach",
     )
     parser.add_argument(
         "--import", dest="import_file", metavar="FILE",

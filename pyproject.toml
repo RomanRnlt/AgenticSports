@@ -1,7 +1,7 @@
 [project]
-name = "reagt"
+name = "agenticsports"
 version = "0.1.0"
-description = "ReAgt - Adaptive Training Agent for Endurance Athletes"
+description = "AgenticSports - Autonomous AI Sports Coach"
 requires-python = ">=3.12"
 dependencies = [
     "google-genai>=1.0",

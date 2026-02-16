@@ -88,7 +88,7 @@ def register_research_tools(registry: ToolRegistry):
             from html import unescape
             import re
 
-            resp = requests.get(url, timeout=15, headers={"User-Agent": "ReAgt/3.0"})
+            resp = requests.get(url, timeout=15, headers={"User-Agent": "AgenticSports/1.0"})
             resp.raise_for_status()
 
             # Basic HTML to text

@@ -1,4 +1,4 @@
-"""Acceptance criteria for ReAgt coaching agent.
+"""Acceptance criteria for AgenticSports coaching agent.
 
 These criteria define what "excellent" looks like. Each criterion is a function
 that takes test results and returns (passed: bool, detail: str).

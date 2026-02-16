@@ -9,26 +9,26 @@ dist/
 build/
 .venv/
 
-# uv
-uv.lock
-
 # OS
 .DS_Store
 
-# RALPH runtime state (not the config/specs)
-.ralph/logs/
-.ralph/.call_count
-.ralph/.last_reset
-.ralph/.exit_signals
-.ralph/.response_analysis
-.ralph/.circuit_breaker_state
-.ralph/.claude_session_id
-.ralph/.loop_start_sha
-.ralph/status.json
+# Data (personal training data — reproducible from your own FIT files)
+data/
 
-# Generated data (reproducible from FIT files via auto-import)
-data/activities/*.json
-data/import_manifest.json
+# Internal development tooling
+.planning/
+.ralph/
+.ralphrc
+
+# Internal docs (not for public repo)
+REAGT.md
+NEXT_MILESTONE.md
+GSD-RALPH-CHEATSHEET.md
+AUTONOMOUS_TEST_PROMPT.md
+
+# Test reports (generated)
+tests/*.json
+tests/*.md
 
 # IDE
 .vscode/

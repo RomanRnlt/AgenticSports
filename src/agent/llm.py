@@ -1,4 +1,4 @@
-"""LLM backend for ReAgt using Gemini 2.5 Flash via google-genai SDK."""
+"""LLM backend for AgenticSports using Gemini 2.5 Flash via google-genai SDK."""
 
 import os
 
@@ -20,6 +20,6 @@ def test_connection() -> str:
     client = get_client()
     response = client.models.generate_content(
         model=MODEL,
-        contents="Say 'ReAgt connected successfully' and nothing else.",
+        contents="Say 'AgenticSports connected successfully' and nothing else.",
     )
     return response.text

@@ -1,3 +1,3 @@
-"""Shared test fixtures for ReAgt test suite."""
+"""Shared test fixtures for AgenticSports test suite."""
 
 import pytest

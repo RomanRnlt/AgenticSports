@@ -1,4 +1,4 @@
-"""Core Agent Loop -- the heart of ReAgt v3.0.
+"""Core Agent Loop -- the heart of AgenticSports.
 
 This is the equivalent of Claude Code's main loop:
     while not done:
@@ -348,14 +348,25 @@ class AgentLoop:
                     round_num, consecutive_errors,
                 )
 
-                # After 2 empty retries, try WITHOUT tools as fallback
-                if consecutive_errors == 2:
+                # After 3 empty retries, try WITHOUT tools as fallback
+                if consecutive_errors == 3:
                     logger.info("Falling back to tool-free call...")
+                    # Strip tool instructions -- without actual tools the model
+                    # would write tool calls as text (e.g. "update_profile(...)")
+                    fallback_prompt = (
+                        system_prompt
+                        + "\n\n# IMPORTANT OVERRIDE\n"
+                        "Tools are temporarily unavailable. Respond ONLY with "
+                        "natural conversational text. Do NOT list, reference, or "
+                        "simulate any tool calls (no update_profile, add_belief, "
+                        "get_activities, etc.). Just answer the athlete directly "
+                        "as a coach would in a normal conversation."
+                    )
                     fallback_response = self.client.models.generate_content(
                         model=MODEL,
                         contents=self._messages,
                         config=genai.types.GenerateContentConfig(
-                            system_instruction=system_prompt,
+                            system_instruction=fallback_prompt,
                             temperature=AGENT_TEMPERATURE,
                         ),
                     )
