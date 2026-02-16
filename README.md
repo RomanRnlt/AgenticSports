@@ -1,120 +1,57 @@
-# AgenticSports — Autonomous AI Sports Coach
+<div align="center">
+  <h1>AgenticSports</h1>
+  <h3>Autonomous AI Sports Coach — Depth over Breadth</h3>
+  <p>
+    <img src="https://img.shields.io/badge/python-≥3.12-blue" alt="Python">
+    <img src="https://img.shields.io/badge/LLM-Gemini_2.5_Flash-orange" alt="LLM">
+    <img src="https://img.shields.io/badge/architecture-agentic_loop-red" alt="Architecture">
+    <img src="https://img.shields.io/badge/status-PoC%20%2F%20MVP_Core-yellow" alt="Status">
+    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
+  </p>
+</div>
 
-An autonomous AI coaching agent that converses with athletes about their actual training data. No hardcoded rules, no pre-built formulas — every coaching decision flows through an LLM-driven cognitive loop.
+**AgenticSports** is a **Proof of Concept** and core of an MVP for an autonomous AI coaching agent. Drop your Garmin FIT files in a folder — the agent imports them, builds a belief-driven athlete model, and coaches you through natural conversation.
 
-Built as a research project to explore how far agentic AI patterns can carry domain-specific reasoning when grounded in real data.
+> **Why "Depth over Breadth"?** Most agent frameworks go wide: many platforms, many providers, generic tools. AgenticSports goes **deep**: one domain, 20+ specialized tools, belief-driven memory, probabilistic athlete modeling. The LLM makes every coaching decision — but the math is always correct.
 
-## What It Does
+## Key Features
 
-Drop your Garmin FIT files into a folder. AgenticSports autonomously imports them, builds a belief-driven athlete model, and coaches you through natural conversation:
-
-```
-You:              How was my training this week?
-AgenticSports:    You logged 4 sessions (3x running, 1x cycling) totaling 6h12min.
-                  Your easy runs were slightly too fast — avg HR 156 vs your Zone 2
-                  ceiling of 148. Consider slowing your Tuesday recovery runs by
-                  ~20 sec/km. Your Sunday long run progression looks solid.
-
-You:              Create a plan for next week
-AgenticSports:    [calls get_activities -> analyze_training_load -> generate_plan]
-                  Based on your 28-day load trend and the fatigue spike from Thursday's
-                  intervals, here's an adjusted week with a recovery emphasis...
-```
-
-The agent decides **what tools to call, when, and how to interpret the results** — just like a real coach who checks your training log before giving advice.
+- **Code Computes, LLM Reasons** — TRIMP, HR zones, pace metrics are computed in Python (LLMs hallucinate math). The LLM only interprets verified numbers.
+- **Belief-Driven Memory** — Every piece of athlete knowledge has confidence scores, embeddings, and outcome tracking. Stale beliefs auto-archive.
+- **Proactive Intelligence** — Detects fatigue spikes, missed sessions, approaching goals, and speaks up without being asked.
+- **Plan Generation + Evaluation** — Plans are scored on 6 dimensions. Below 70/100? Auto-regenerated with feedback.
+- **Zero Hardcoded Rules** — All coaching decisions are LLM-driven. No if/else coaching logic anywhere.
+- **Episodic Reflection** — Training block summaries feed back into future planning. Compound learning without fine-tuning.
 
 ## Architecture
 
 ```mermaid
-graph TB
-    subgraph Interface["Interface Layer"]
-        CLI["Rich CLI"]
-    end
+graph TD
+    A(("Athlete")) --> B["Agent Loop"]
+    F[("FIT Files")] --> G["Metrics Engine"]
 
-    subgraph Agent["Cognitive Engine"]
-        Loop["Agent Loop"]
-        SP["System Prompt Builder"]
-        Startup["Startup Assessment"]
-        Proactive["Proactive Triggers"]
-        Reflection["Episodic Reflection"]
-        Trajectory["Goal Trajectory"]
-    end
+    B <--> C["Gemini 2.5 Flash"]
+    B --> D["Domain Tools · 20+"]
 
-    subgraph Tools["Tool Layer"]
-        TR["Tool Registry"]
-        DT["Data Tools"]
-        AT["Analysis Tools"]
-        PT["Planning Tools"]
-        MT["Memory Tools"]
-        RT["Research Tools"]
-        META["Meta Tools"]
-        MCP["MCP Client"]
-    end
+    D --> D1["Data · Analysis · Planning · Memory · Research"]
 
-    subgraph Memory["Memory Layer"]
-        UM["User Model<br/><i>Belief-driven</i>"]
-        EP["Episodes<br/><i>Training reflections</i>"]
-        Profile["Profile<br/><i>Structured snapshot</i>"]
-    end
+    D1 --> G
+    D1 --> H["Belief Store"]
+    D1 --> I["Context Builder"]
 
-    subgraph Data["Data Layer"]
-        FP["FIT Parser"]
-        AS["Activity Store"]
-        AC["Activity Context<br/><i>Multi-horizon</i>"]
-        Metrics["Metrics Engine<br/><i>TRIMP, HR zones</i>"]
-    end
-
-    subgraph Storage["File Storage"]
-        FIT["Garmin FIT Files"]
-        JSON["Activity JSON"]
-        JSONL["Session Logs"]
-        Beliefs["Belief Store"]
-    end
-
-    CLI --> Loop
-    Loop --> SP
-    Loop --> TR
-    SP --> UM
-    Startup --> Loop
-    Proactive --> Loop
-
-    TR --> DT & AT & PT & MT & RT & META
-    TR --> MCP
-
-    DT --> AS
-    DT --> AC
-    MT --> UM
-    AT --> Metrics
-    PT --> UM
-
-    UM --> Beliefs
-    EP --> Storage
-
-    FP --> FIT
-    AS --> JSON
-    AC --> AS
-    Loop --> JSONL
-
-    style Agent fill:#1a1a2e,stroke:#e94560,color:#fff
-    style Tools fill:#16213e,stroke:#0f3460,color:#fff
-    style Memory fill:#0f3460,stroke:#533483,color:#fff
-    style Data fill:#533483,stroke:#e94560,color:#fff
-```
-
-### The Core Loop
-
-Inspired by [Claude Code](https://docs.anthropic.com/en/docs/claude-code)'s architecture — a simple loop that gives the LLM full autonomy over tool selection:
-
-```mermaid
-flowchart LR
-    A["User Message"] --> B["LLM + Tools"]
-    B --> C{Tool calls?}
-    C -->|Yes| D["Execute Tools"]
-    D --> B
-    C -->|No| E["Coaching Response"]
+    G -->|"TRIMP · HR Zones · Pace"| I
+    H -->|"confidence · embeddings"| I
+    I -->|"last session · 7d · 28d"| B
 
     style B fill:#e94560,stroke:#fff,color:#fff
+    style C fill:#1a1a2e,stroke:#e94560,color:#fff
+    style D fill:#16213e,stroke:#0f3460,color:#fff
+    style G fill:#533483,stroke:#e94560,color:#fff
+    style H fill:#0f3460,stroke:#533483,color:#fff
+    style I fill:#533483,stroke:#e94560,color:#fff
 ```
+
+The core loop is inspired by [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — the LLM sees all 20+ tools and autonomously decides what to call:
 
 ```python
 while not done:
@@ -126,18 +63,113 @@ while not done:
         return response.text  # coaching answer
 ```
 
-The model sees **all 20+ tools** and autonomously decides the right sequence. For a simple question it might call nothing. For plan generation it might chain `get_activities -> analyze_training_load -> generate_plan -> evaluate_plan` across multiple rounds.
+<details>
+<summary><b>Core Loop Diagram</b></summary>
 
-### Key Design Decisions
+```mermaid
+flowchart LR
+    A["Message"] --> B["Context +<br/>System Prompt"]
+    B --> C["LLM + Tools"]
+    C --> D{Tool calls?}
+    D -->|Yes| E["Execute"]
+    E -->|results| C
+    D -->|No| F["Response"]
+    F --> G["Save + Update<br/>Beliefs"]
 
-| Decision | Why |
-|---|---|
-| **Zero hardcoded coaching rules** | Validates that LLM reasoning + data tools can replace formula-based coaching |
-| **Belief-driven user model** | Each belief has confidence, category, temporal metadata, and embeddings for similarity search |
-| **Multi-horizon context injection** | Every turn gets last session + 7-day + 28-day summaries — the agent always knows "where the athlete is" |
-| **Episodic reflections** | Training block summaries feed back into future planning — compound learning without fine-tuning |
-| **Session persistence** | JSONL turn logs enable session resumption and context compression when the window fills up |
-| **Tool-free fallback** | If the LLM returns empty responses (Gemini edge case), gracefully degrades to direct conversation |
+    style C fill:#e94560,stroke:#fff,color:#fff
+    style E fill:#533483,stroke:#fff,color:#fff
+    style G fill:#0f3460,stroke:#fff,color:#fff
+```
+
+</details>
+
+<details>
+<summary><b>Belief Memory Lifecycle</b></summary>
+
+```mermaid
+flowchart LR
+    subgraph Extract
+        A["Conversation"] --> B["LLM extracts beliefs"]
+    end
+
+    subgraph Store
+        B --> C["Belief + Embedding<br/>confidence: 0.85"]
+        C --> D[("Belief Store<br/>BM25 + Cosine")]
+    end
+
+    subgraph Apply
+        D -->|next session| E["Inject into Prompt"]
+        E --> F["Plan uses beliefs"]
+    end
+
+    subgraph Learn
+        F -->|confirmed| G["confidence +"]
+        F -->|contradicted| H["confidence −"]
+    end
+
+    style B fill:#e94560,stroke:#fff,color:#fff
+    style D fill:#533483,stroke:#e94560,color:#fff
+    style F fill:#1a1a2e,stroke:#e94560,color:#fff
+```
+
+Each belief carries: **confidence** (0.0–1.0), **category** (preference, constraint, fitness, ...), **stability** (stable/evolving/session), **embedding** (for semantic search), and **outcome tracking** (confirmed/contradicted count).
+
+</details>
+
+<details>
+<summary><b>Cognitive Cycle: Perceive → Reason → Plan → Act → Reflect</b></summary>
+
+```mermaid
+flowchart LR
+    P["Perceive<br/>Import FIT"] --> R["Reason<br/>Context 7d+28d"]
+    R --> PL["Plan<br/>Score ≥ 70"]
+    PL --> A["Act<br/>Update Beliefs"]
+    A --> RE["Reflect<br/>Meta-beliefs"]
+    RE -->|compound learning| R
+
+    style P fill:#16213e,stroke:#0f3460,color:#fff
+    style R fill:#1a1a2e,stroke:#e94560,color:#fff
+    style PL fill:#e94560,stroke:#fff,color:#fff
+    style A fill:#533483,stroke:#e94560,color:#fff
+    style RE fill:#0f3460,stroke:#533483,color:#fff
+```
+
+1. **Perceive** — Auto-import FIT files (5,000+ in < 1 second via hash manifest)
+2. **Reason** — Multi-horizon context (last session + 7-day + 28-day) injected every turn
+3. **Plan** — Generate plans, score on 6 dimensions, regenerate if < 70/100
+4. **Act** — Update beliefs, track outcomes, adjust confidence
+5. **Reflect** — Block reflections extract meta-beliefs for future planning
+
+</details>
+
+## Depth vs. Breadth
+
+| | AgenticSports | Generic Frameworks |
+|---|---|---|
+| **Tools** | 20+ domain-specific | Generic (shell, web) |
+| **Memory** | Beliefs + embeddings + confidence | Markdown files |
+| **Math** | Python-computed, correct | LLM-computed, approximate |
+| **Strength** | Deep domain reasoning | Broad platform coverage |
+
+## Quick Start
+
+> **Prerequisites**: Python 3.12+, [uv](https://docs.astral.sh/uv/), a [Gemini API key](https://aistudio.google.com/apikey)
+
+```bash
+git clone https://github.com/RomanRnlt/AgenticSports.git
+cd AgenticSports
+uv sync
+echo "GEMINI_API_KEY=your-key-here" > .env
+mkdir -p data/gfit    # copy your .fit files here
+./start.sh
+```
+
+| Command | Description |
+|---------|-------------|
+| `./start.sh` | Interactive coaching chat |
+| `./start.sh --assess` | Training assessment |
+| `./start.sh --trajectory` | Goal trajectory prediction |
+| `./start.sh --reset` | Fresh start (reset model) |
 
 ## Tech Stack
 
@@ -146,124 +178,63 @@ The model sees **all 20+ tools** and autonomously decides the right sequence. Fo
 | LLM | Google Gemini 2.5 Flash |
 | Language | Python 3.12+ |
 | CLI | Rich |
-| Data | Garmin FIT files via `fitdecode` |
-| Search | BM25 (belief similarity) |
+| Data | Garmin FIT via `fitdecode` |
+| Search | BM25 + cosine similarity |
 | Embeddings | Gemini `text-embedding-004` |
-| Storage | File-based JSON / JSONL |
-| Package Manager | uv |
+| Storage | JSON / JSONL (file-based) |
 
 ## Project Structure
 
 ```
 src/
-├── interface/           # CLI layer (Rich terminal UI)
-│   ├── cli.py           # Command router, onboarding, chat
-│   └── __main__.py      # Entry point
-│
-├── agent/               # Cognitive engine (~4,000 LOC)
-│   ├── agent_loop.py    # Core loop (LLM + tools)
-│   ├── system_prompt.py # Dynamic prompt with athlete context
-│   ├── startup.py       # Session greeting & assessment
-│   ├── proactive.py     # Trigger engine (fatigue, milestones, risk)
-│   ├── reflection.py    # Training block reflections
-│   ├── trajectory.py    # Goal attainment prediction
-│   ├── plan_evaluator.py# Plan quality scoring
-│   ├── tools/           # Tool registry + 6 tool modules
-│   │   ├── registry.py  # Unified tool interface
-│   │   ├── data_tools.py
-│   │   ├── analysis_tools.py
-│   │   ├── planning_tools.py
-│   │   ├── memory_tools.py
-│   │   ├── research_tools.py
-│   │   └── meta_tools.py
-│   └── mcp/             # Model Context Protocol client
-│
-├── memory/              # Athlete knowledge
-│   ├── user_model.py    # Belief-driven model with embeddings
-│   ├── profile.py       # Structured profile snapshots
-│   └── episodes.py      # Episodic memory
-│
-└── tools/               # Data parsing & metrics
-    ├── fit_parser.py    # Garmin FIT -> structured data
-    ├── activity_store.py# Activity persistence + auto-import
-    ├── activity_context.py # Multi-horizon context builder
-    ├── fitness_tracker.py
-    └── metrics.py       # TRIMP, HR zones, VO2max
+├── interface/            # Rich CLI, onboarding, chat loop
+├── agent/                # Cognitive engine (~4,200 LOC)
+│   ├── agent_loop.py     #   Core agentic loop
+│   ├── system_prompt.py  #   Dynamic prompt builder
+│   ├── proactive.py      #   Trigger engine
+│   ├── reflection.py     #   Episodic reflections
+│   ├── trajectory.py     #   Goal prediction
+│   ├── plan_evaluator.py #   Plan quality scoring
+│   └── tools/            #   20+ domain tools
+├── memory/               # Belief model + episodes (~800 LOC)
+└── tools/                # FIT parser + metrics (~850 LOC)
 ```
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) package manager
-- A Gemini API key ([get one here](https://aistudio.google.com/apikey))
-
-### Setup
-
-```bash
-git clone https://github.com/RomanRnlt/AgenticSports.git
-cd AgenticSports
-
-# Install dependencies
-uv sync
-
-# Configure API key
-echo "GEMINI_API_KEY=your-key-here" > .env
-
-# Add your Garmin FIT files
-mkdir -p data/gfit
-# Copy your .fit files into data/gfit/
-
-# Run
-./start.sh
-```
-
-### Usage
-
-```bash
-# Interactive chat mode (default)
-./start.sh
-
-# Run a training assessment
-./start.sh --assess
-
-# Goal trajectory prediction
-./start.sh --trajectory
-
-# Fresh start (reset user model)
-./start.sh --reset
-```
-
-## How the Agent Thinks
-
-### 1. Perceive
-On startup, AgenticSports auto-imports any new FIT files using a two-pass strategy: fast classification (sport detection from session frames), then targeted parsing of new files. 5,000+ files import in under a second on subsequent launches.
-
-### 2. Reason
-The system prompt injects multi-horizon context (last session, 7-day trend, 28-day load) so the LLM always has situational awareness. Proactive triggers detect patterns like rising fatigue, missed sessions, or approaching goals.
-
-### 3. Plan
-Training plans are generated through a tool chain: the agent queries activity history, assesses current fitness, then generates a plan. A separate evaluation step scores plans on specificity, completeness, and alignment with athlete data.
-
-### 4. Act
-The belief-driven user model captures everything the agent learns — preferences, constraints, fitness level, injury history — as structured beliefs with confidence scores and embeddings. This knowledge persists across sessions.
-
-### 5. Reflect
-After training blocks, the agent generates episodic reflections: what worked, what didn't, fitness deltas. These reflections feed back into future planning — compound learning without model fine-tuning.
 
 ## Testing
 
 ```bash
-# Unit tests
-uv run pytest tests/
-
-# Integration tests (requires GEMINI_API_KEY)
-uv run pytest tests/ -m integration
+uv run pytest tests/                  # unit tests
+uv run pytest tests/ -m integration   # requires GEMINI_API_KEY
 ```
 
-The test suite includes 3 athlete scenarios (triathlete, marathon runner, cyclist) validated against 8 acceptance criteria covering plan quality, belief extraction, and coaching behavior.
+8/8 acceptance criteria passed across 3 athlete scenarios (triathlete, marathon runner, cyclist).
+
+<details>
+<summary><b>Acceptance Criteria</b></summary>
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | Zero hardcoded coaching rules | Passed |
+| 2 | Full tool autonomy (LLM selects tools) | Passed |
+| 3 | Belief persistence across sessions | Passed |
+| 4 | Plan generation with quality evaluation | Passed |
+| 5 | Data-driven insights from FIT files | Passed |
+| 6 | Proactive communication | Passed |
+| 7 | Episodic memory integration | Passed |
+| 8 | Goal trajectory confidence calibration | Passed |
+
+</details>
+
+## Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| **Code computes, LLM reasons** | LLMs hallucinate numbers. `math.exp()` is always correct. |
+| **Single agent, not a swarm** | One coach who knows you well > five generic assistants. |
+| **20+ tools, no router** | LLM autonomously selects the right tools each turn. |
+| **Belief-driven memory** | Confidence decays on contradiction, strengthens on confirmation. |
+| **File-based storage** | JSON is auditable, portable, no DB dependency. |
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
