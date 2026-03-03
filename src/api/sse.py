@@ -67,6 +67,14 @@ class SSEEmitter:
         )
 
     @staticmethod
+    def session_start(session_id: str) -> ServerSentEvent:
+        """Emit resolved session ID so the client can track the conversation."""
+        return ServerSentEvent(
+            event="session_start",
+            data=json.dumps({"session_id": session_id}, ensure_ascii=False),
+        )
+
+    @staticmethod
     def done() -> ServerSentEvent:
         """Sentinel event — signals the stream is finished."""
         return ServerSentEvent(

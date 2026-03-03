@@ -177,6 +177,10 @@ async def _chat_event_generator(
             len(user_message),
         )
 
+        # Emit session_start before any agent events so the client
+        # knows which session this stream belongs to.
+        yield SSEEmitter.session_start(resolved_session_id)
+
         # Real-time streaming via asyncio.Queue
         event_queue: asyncio.Queue[ServerSentEvent | None] = asyncio.Queue()
 

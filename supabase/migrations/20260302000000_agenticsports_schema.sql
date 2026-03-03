@@ -36,6 +36,15 @@
 -- Ensure pgvector is available (idempotent).
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- Prerequisite: updated_at trigger function (may not exist on fresh projects).
+CREATE OR REPLACE FUNCTION public.update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 
 -- ============================================================================
 -- 1. PROFILES

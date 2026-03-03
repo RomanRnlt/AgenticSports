@@ -81,6 +81,14 @@ class TestSSEEmitter:
         assert data["output_tokens"] == 45
         assert data["model"] == "gemini/gemini-2.5-flash"
 
+    def test_session_start_event(self) -> None:
+        """SSEEmitter.session_start produces event='session_start' with session_id."""
+        evt = SSEEmitter.session_start("session_2026-03-03_120000")
+
+        assert evt.event == "session_start"
+        data = json.loads(evt.data)
+        assert data["session_id"] == "session_2026-03-03_120000"
+
     def test_format_event_returns_raw_sse_string(self) -> None:
         """SSEEmitter.format_event builds the correct raw SSE wire format."""
         raw = SSEEmitter.format_event("test_event", {"key": "value"})
