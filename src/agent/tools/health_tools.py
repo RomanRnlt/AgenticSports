@@ -162,50 +162,10 @@ def register_health_tools(registry: ToolRegistry) -> None:
 
     def get_daily_metrics(days: int = 14) -> dict:
         """Get daily health metrics (sleep, HRV, stress, body battery, recovery)."""
-        from src.db.health_data_db import list_daily_metrics, list_garmin_daily_stats
+        from src.db.health_data_db import get_merged_daily_metrics
 
         user_id = _settings.agenticsports_user_id
-
-        garmin_rows = list_garmin_daily_stats(user_id, days=days)
-        health_rows = list_daily_metrics(user_id, days=days)
-
-        # Build date-keyed dict from Garmin data as the baseline
-        by_date: dict[str, dict] = {}
-        for r in garmin_rows:
-            date = r.get("date", "")[:10]
-            by_date[date] = {
-                "date": date,
-                "sleep_minutes": r.get("sleep_duration_minutes"),
-                "sleep_score": r.get("sleep_score"),
-                "hrv": r.get("hrv_weekly_avg"),
-                "resting_hr": r.get("resting_heart_rate"),
-                "stress": r.get("stress_avg"),
-                "body_battery_high": r.get("body_battery_high"),
-                "body_battery_low": r.get("body_battery_low"),
-                "recovery_score": None,
-                "steps": r.get("steps"),
-                "source": "garmin",
-            }
-
-        # Overlay health_daily_metrics (wins on conflict)
-        for r in health_rows:
-            date = r.get("date", "")[:10]
-            existing = by_date.get(date, {})
-            by_date[date] = {
-                "date": date,
-                "sleep_minutes": r.get("sleep_duration_minutes") if r.get("sleep_duration_minutes") is not None else existing.get("sleep_minutes"),
-                "sleep_score": r.get("sleep_score") if r.get("sleep_score") is not None else existing.get("sleep_score"),
-                "hrv": r.get("hrv_avg") if r.get("hrv_avg") is not None else existing.get("hrv"),
-                "resting_hr": r.get("resting_heart_rate") if r.get("resting_heart_rate") is not None else existing.get("resting_hr"),
-                "stress": r.get("stress_avg") if r.get("stress_avg") is not None else existing.get("stress"),
-                "body_battery_high": r.get("body_battery_high") if r.get("body_battery_high") is not None else existing.get("body_battery_high"),
-                "body_battery_low": r.get("body_battery_low") if r.get("body_battery_low") is not None else existing.get("body_battery_low"),
-                "recovery_score": r.get("recovery_score") if r.get("recovery_score") is not None else existing.get("recovery_score"),
-                "steps": r.get("steps") if r.get("steps") is not None else existing.get("steps"),
-                "source": "health",
-            }
-
-        metrics = sorted(by_date.values(), key=lambda m: m.get("date", ""), reverse=True)
+        metrics = get_merged_daily_metrics(user_id, days=days)
 
         return {"count": len(metrics), "metrics": metrics}
 

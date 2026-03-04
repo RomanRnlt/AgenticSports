@@ -326,12 +326,12 @@ async def _check_triggers_for_user(user_id: str) -> list[dict]:
         # PHASE 4b: Dynamic trigger evaluation (agent-defined rules first)
         try:
             from src.agent.dynamic_triggers import evaluate_dynamic_triggers
-            from src.db.health_data_db import list_daily_metrics as _list_daily_metrics
+            from src.db.health_data_db import get_merged_daily_metrics
 
-            # Fetch daily metrics synchronously (offload to thread pool).
+            # Fetch merged daily metrics (Garmin + Health) synchronously.
             daily_metrics = await loop.run_in_executor(
                 None,
-                lambda: _list_daily_metrics(user_id, days=14),
+                lambda: get_merged_daily_metrics(user_id, days=14),
             )
 
             dynamic_triggers = await loop.run_in_executor(

@@ -48,16 +48,23 @@ and manage athlete memory. DO NOT guess -- use tools to check.
 2. Factor recovery data into training recommendations
 3. If HRV is low or sleep is poor, suggest reduced intensity
 
+**When you need to understand available health data:**
+1. get_health_inventory() — see connected providers and available metrics
+2. Decide which metrics are relevant for this athlete's sports/goals
+3. Store relevance decisions as beliefs (add_belief category "health_preference")
+
 **When the athlete wants a training plan:**
 1. get_athlete_profile() -- check profile completeness
 2. get_activities() -- see recent training
 3. analyze_training_load() -- understand current load and trends
-4. web_search() -- research sport-specific methodology (optional)
-5. create_training_plan() -- generate the plan
-6. evaluate_plan() -- quality check (ALWAYS do this)
-7. If score < 70: create_training_plan(feedback=...) -- regenerate with fixes
-8. save_plan() -- save the final plan
-9. Respond with the plan summary
+4. get_daily_metrics() -- check recovery status (sleep, HRV, stress)
+5. analyze_health_trends() -- detect multi-day recovery patterns
+6. web_search() -- research sport-specific methodology (optional)
+7. create_training_plan() -- generate the plan
+8. evaluate_plan() -- quality check (ALWAYS do this)
+9. If score < 70: create_training_plan(feedback=...) -- regenerate with fixes
+10. save_plan() -- save the final plan
+11. Respond with the plan summary
 
 **When you learn something about the athlete:**
 - Name mentioned -> update_profile(field="name", value="...")
@@ -193,6 +200,9 @@ When an athlete trains in multiple sports, apply these principles:
 
 ### Recovery Window Awareness
 - Use get_daily_metrics() to check HRV, sleep quality, and body battery
+- Use analyze_health_trends() for multi-day trend detection
+- If HRV is "declining" over 7+ days -> consider deload week
+- If sleep score is "declining" -> ask about sleep habits
 - If HRV is below the athlete's 7-day average -> reduce intensity across ALL sports
 - Body battery < 25 -> suggest rest day regardless of training plan
 - Factor in travel, work stress, illness across all sport commitments
@@ -417,6 +427,10 @@ Once ALL 5 minimum items are gathered, execute this sequence:
 8. `save_plan` — persist the approved plan
 9. `complete_onboarding` — mark onboarding as done
 
+After first health data sync:
+10. `get_health_inventory()` — discover available health metrics
+11. Based on available data, define health-aware trigger rules
+
 ## Important
 - Do NOT ask for all 5 items at once — be natural
 - Do NOT skip the setup sequence — the athlete needs configs before their first plan
@@ -556,6 +570,23 @@ def build_runtime_context(
                         + "\n".join(sport_lines)
                     )
                 sections.append(load_header)
+    except Exception:
+        pass  # Non-critical — do not crash context building
+
+    # --- Current Recovery Status ---
+    try:
+        from src.config import get_settings as _get_settings_recovery
+        _rs = _get_settings_recovery()
+        if _rs.use_supabase and _rs.agenticsports_user_id:
+            from src.services.health_context import (
+                build_health_summary,
+                format_recovery_context_block,
+            )
+            health_summary = build_health_summary(
+                _rs.agenticsports_user_id, days=7,
+            )
+            if health_summary and health_summary["data_available"]:
+                sections.append(format_recovery_context_block(health_summary))
     except Exception:
         pass  # Non-critical — do not crash context building
 

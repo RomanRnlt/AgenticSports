@@ -15,6 +15,65 @@ from src.agent.tools.registry import Tool, ToolRegistry
 from src.config import get_settings
 
 
+def _build_recovery_planning_context(user_id: str | None) -> str | None:
+    """Build recovery-aware planning context from health data.
+
+    Returns planning-relevant hints based on current recovery metrics,
+    or None if no health data or on error.
+    """
+    if not user_id:
+        return None
+
+    try:
+        from src.services.health_context import build_health_summary
+
+        summary = build_health_summary(user_id, days=7)
+        if not summary or not summary.get("data_available"):
+            return None
+
+        latest = summary.get("latest", {})
+        avgs = summary.get("averages_7d", {})
+        hints: list[str] = []
+
+        # Sleep quality check
+        sleep_score = latest.get("sleep_score")
+        if sleep_score is not None and sleep_score < 65:
+            hints.append(f"Sleep score is low ({sleep_score}/100). Reduce high-intensity sessions, add recovery work.")
+
+        # HRV trend check
+        hrv = latest.get("hrv")
+        avg_hrv = avgs.get("hrv")
+        if hrv is not None and avg_hrv is not None and avg_hrv > 0:
+            hrv_deviation = ((hrv - avg_hrv) / avg_hrv) * 100
+            if hrv_deviation < -15:
+                hints.append(f"HRV is {abs(hrv_deviation):.0f}% below 7-day average ({hrv} vs {avg_hrv}). Signs of accumulated fatigue.")
+
+        # Stress check
+        stress = latest.get("stress")
+        if stress is not None and stress > 50:
+            hints.append(f"Stress level is elevated ({stress}). Consider lighter training load.")
+
+        # Body battery check
+        body_battery = latest.get("body_battery_high")
+        if body_battery is not None and body_battery < 30:
+            hints.append(f"Body battery is very low ({body_battery}). Rest day recommended.")
+
+        if not hints:
+            # Good recovery — note it
+            parts = []
+            if sleep_score is not None:
+                parts.append(f"Sleep {sleep_score}")
+            if hrv is not None:
+                parts.append(f"HRV {hrv}")
+            if parts:
+                hints.append(f"Recovery looks good ({', '.join(parts)}). Normal training load appropriate.")
+
+        return "\n".join(hints)
+
+    except Exception:
+        return None  # Non-critical — plan generation continues without recovery context
+
+
 def register_planning_tools(registry: ToolRegistry, user_model):
     """Register all planning tools."""
     _settings = get_settings()
@@ -53,6 +112,11 @@ def register_planning_tools(registry: ToolRegistry, user_model):
             profile, beliefs=beliefs, activities=activities,
             relevant_episodes=relevant_eps,
         )
+
+        # Inject recovery context when available
+        recovery_context = _build_recovery_planning_context(uid if _settings.use_supabase else None)
+        if recovery_context:
+            base_prompt += f"\n\nCURRENT RECOVERY STATUS:\n{recovery_context}"
 
         if focus:
             base_prompt += f"\n\nFOCUS FOR THIS PLAN: {focus}"

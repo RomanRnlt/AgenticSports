@@ -190,3 +190,40 @@ async def test_tick_processes_active_users():
         await svc._tick()
 
     assert set(processed_users) == {"user-1", "user-2"}
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat trigger uses get_merged_daily_metrics (Phase 5b)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_triggers_uses_merged_daily_metrics():
+    """_check_triggers_for_user must use get_merged_daily_metrics, not list_daily_metrics."""
+    import inspect
+    from src.services.heartbeat import _check_triggers_for_user
+
+    source = inspect.getsource(_check_triggers_for_user)
+
+    # Must import get_merged_daily_metrics
+    assert "get_merged_daily_metrics" in source, (
+        "_check_triggers_for_user should import get_merged_daily_metrics"
+    )
+    # Must NOT import list_daily_metrics
+    assert "list_daily_metrics" not in source, (
+        "_check_triggers_for_user should no longer reference list_daily_metrics"
+    )
+
+
+def test_heartbeat_source_does_not_reference_list_daily_metrics():
+    """The heartbeat module source must not contain list_daily_metrics anywhere."""
+    import src.services.heartbeat as hb_module
+    import inspect
+
+    full_source = inspect.getsource(hb_module)
+    assert "list_daily_metrics" not in full_source, (
+        "heartbeat.py should use get_merged_daily_metrics, not list_daily_metrics"
+    )
+    assert "get_merged_daily_metrics" in full_source, (
+        "heartbeat.py must import get_merged_daily_metrics"
+    )

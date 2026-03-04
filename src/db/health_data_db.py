@@ -164,6 +164,72 @@ def list_garmin_daily_stats(
 
 
 # ---------------------------------------------------------------------------
+# Merged daily metrics (Garmin + Health, unified schema)
+# ---------------------------------------------------------------------------
+
+
+def get_merged_daily_metrics(
+    user_id: str,
+    days: int = 14,
+) -> list[dict]:
+    """Merge Garmin daily stats and Health daily metrics into a unified list.
+
+    Garmin data is the baseline; Health data overlays on conflict (non-None wins).
+    Field mapping:
+    - Garmin ``hrv_weekly_avg`` → unified ``hrv``
+    - Health ``hrv_avg`` → unified ``hrv``
+
+    Returns list of dicts sorted newest-first with keys:
+    date, sleep_minutes, sleep_score, hrv, resting_hr, stress,
+    body_battery_high, body_battery_low, recovery_score, steps, source.
+    """
+    garmin_rows = list_garmin_daily_stats(user_id, days=days)
+    health_rows = list_daily_metrics(user_id, days=days)
+
+    by_date: dict[str, dict] = {}
+
+    # Garmin as baseline
+    for r in garmin_rows:
+        date = r.get("date", "")[:10]
+        by_date[date] = {
+            "date": date,
+            "sleep_minutes": r.get("sleep_duration_minutes"),
+            "sleep_score": r.get("sleep_score"),
+            "hrv": r.get("hrv_weekly_avg"),
+            "resting_hr": r.get("resting_heart_rate"),
+            "stress": r.get("stress_avg"),
+            "body_battery_high": r.get("body_battery_high"),
+            "body_battery_low": r.get("body_battery_low"),
+            "recovery_score": None,
+            "steps": r.get("steps"),
+            "source": "garmin",
+        }
+
+    # Health overlay (wins on conflict when non-None)
+    for r in health_rows:
+        date = r.get("date", "")[:10]
+        existing = by_date.get(date, {})
+        by_date[date] = {
+            "date": date,
+            "sleep_minutes": r.get("sleep_duration_minutes") if r.get("sleep_duration_minutes") is not None else existing.get("sleep_minutes"),
+            "sleep_score": r.get("sleep_score") if r.get("sleep_score") is not None else existing.get("sleep_score"),
+            "hrv": r.get("hrv_avg") if r.get("hrv_avg") is not None else existing.get("hrv"),
+            "resting_hr": r.get("resting_heart_rate") if r.get("resting_heart_rate") is not None else existing.get("resting_hr"),
+            "stress": r.get("stress_avg") if r.get("stress_avg") is not None else existing.get("stress"),
+            "body_battery_high": r.get("body_battery_high") if r.get("body_battery_high") is not None else existing.get("body_battery_high"),
+            "body_battery_low": r.get("body_battery_low") if r.get("body_battery_low") is not None else existing.get("body_battery_low"),
+            "recovery_score": r.get("recovery_score") if r.get("recovery_score") is not None else existing.get("recovery_score"),
+            "steps": r.get("steps") if r.get("steps") is not None else existing.get("steps"),
+            "source": "health" if any(
+                r.get(k) is not None
+                for k in ("sleep_duration_minutes", "sleep_score", "hrv_avg", "resting_heart_rate", "stress_avg")
+            ) else existing.get("source", "garmin"),
+        }
+
+    return sorted(by_date.values(), key=lambda m: m.get("date", ""), reverse=True)
+
+
+# ---------------------------------------------------------------------------
 # Summary helpers
 # ---------------------------------------------------------------------------
 

@@ -22,6 +22,7 @@ import pytest
 from src.db.health_data_db import (
     get_cross_source_load_summary,
     get_health_activity_summary,
+    get_merged_daily_metrics,
     list_daily_metrics,
     list_garmin_activities,
     list_garmin_daily_stats,
@@ -682,4 +683,114 @@ class TestGetCrossSourceLoadSummary:
         lp2, gp2 = self._patch_all([], [], [])
         with lp2, gp2:
             b = get_cross_source_load_summary(USER_ID)
+        assert a is not b
+
+
+# ---------------------------------------------------------------------------
+# get_merged_daily_metrics
+# ---------------------------------------------------------------------------
+
+
+class TestGetMergedDailyMetrics:
+    """Tests for get_merged_daily_metrics() — the shared merge function."""
+
+    @staticmethod
+    def _patch_merge(garmin_rows, health_rows):
+        """Patch both garmin and health daily queries for merge tests."""
+        client = _mock_supabase({
+            "garmin_daily_stats": garmin_rows,
+            "health_daily_metrics": health_rows,
+        })
+        return patch("src.db.health_data_db.get_supabase", return_value=client)
+
+    def test_empty_returns_empty_list(self) -> None:
+        with self._patch_merge([], []):
+            result = get_merged_daily_metrics(USER_ID)
+        assert result == []
+
+    def test_garmin_only_data(self) -> None:
+        garmin = [{"date": "2026-03-04", "sleep_duration_minutes": 430,
+                   "sleep_score": 72, "hrv_weekly_avg": 55.0,
+                   "resting_heart_rate": 52, "stress_avg": 28,
+                   "body_battery_high": 90, "body_battery_low": 40, "steps": 8500}]
+        with self._patch_merge(garmin, []):
+            result = get_merged_daily_metrics(USER_ID, days=7)
+        assert len(result) == 1
+        m = result[0]
+        assert m["date"] == "2026-03-04"
+        assert m["hrv"] == 55.0
+        assert m["source"] == "garmin"
+        assert m["recovery_score"] is None
+
+    def test_health_only_data(self) -> None:
+        health = [{"date": "2026-03-04", "sleep_duration_minutes": 480,
+                   "sleep_score": 85, "hrv_avg": 62.0,
+                   "resting_heart_rate": 50, "stress_avg": 20,
+                   "body_battery_high": 95, "body_battery_low": 35,
+                   "recovery_score": 88, "steps": 9200}]
+        with self._patch_merge([], health):
+            result = get_merged_daily_metrics(USER_ID)
+        assert len(result) == 1
+        m = result[0]
+        assert m["hrv"] == 62.0
+        assert m["recovery_score"] == 88
+        assert m["source"] == "health"
+
+    def test_health_wins_on_conflict(self) -> None:
+        garmin = [{"date": "2026-03-04", "sleep_duration_minutes": 430,
+                   "sleep_score": 72, "hrv_weekly_avg": 55.0,
+                   "resting_heart_rate": 52, "stress_avg": 28,
+                   "body_battery_high": 90, "body_battery_low": 40, "steps": 8500}]
+        health = [{"date": "2026-03-04", "sleep_duration_minutes": 480,
+                   "sleep_score": 85, "hrv_avg": 62.0,
+                   "resting_heart_rate": 50, "stress_avg": 20,
+                   "body_battery_high": 95, "body_battery_low": 35,
+                   "recovery_score": 88, "steps": 9200}]
+        with self._patch_merge(garmin, health):
+            result = get_merged_daily_metrics(USER_ID)
+        m = result[0]
+        assert m["sleep_minutes"] == 480
+        assert m["hrv"] == 62.0
+        assert m["recovery_score"] == 88
+
+    def test_garmin_fallback_when_health_is_none(self) -> None:
+        garmin = [{"date": "2026-03-04", "sleep_duration_minutes": 430,
+                   "sleep_score": 72, "hrv_weekly_avg": 55.0,
+                   "resting_heart_rate": 52, "stress_avg": 28,
+                   "body_battery_high": 90, "body_battery_low": 40, "steps": 8500}]
+        health = [{"date": "2026-03-04", "sleep_duration_minutes": None,
+                   "sleep_score": None, "hrv_avg": None,
+                   "resting_heart_rate": None, "stress_avg": None,
+                   "body_battery_high": None, "body_battery_low": None,
+                   "recovery_score": 88, "steps": None}]
+        with self._patch_merge(garmin, health):
+            result = get_merged_daily_metrics(USER_ID)
+        m = result[0]
+        assert m["sleep_minutes"] == 430
+        assert m["hrv"] == 55.0
+        assert m["recovery_score"] == 88
+
+    def test_sorted_newest_first(self) -> None:
+        garmin = [
+            {"date": "2026-03-02", "sleep_duration_minutes": 400, "sleep_score": 70,
+             "hrv_weekly_avg": 50.0, "resting_heart_rate": 55, "stress_avg": 30,
+             "body_battery_high": 80, "body_battery_low": 30, "steps": 7000},
+            {"date": "2026-03-04", "sleep_duration_minutes": 430, "sleep_score": 72,
+             "hrv_weekly_avg": 55.0, "resting_heart_rate": 52, "stress_avg": 28,
+             "body_battery_high": 90, "body_battery_low": 40, "steps": 8500},
+        ]
+        with self._patch_merge(garmin, []):
+            result = get_merged_daily_metrics(USER_ID)
+        dates = [m["date"] for m in result]
+        assert dates == ["2026-03-04", "2026-03-02"]
+
+    def test_returns_new_list(self) -> None:
+        garmin = [{"date": "2026-03-04", "sleep_duration_minutes": 430,
+                   "sleep_score": 72, "hrv_weekly_avg": 55.0,
+                   "resting_heart_rate": 52, "stress_avg": 28,
+                   "body_battery_high": 90, "body_battery_low": 40, "steps": 8500}]
+        with self._patch_merge(garmin, []):
+            a = get_merged_daily_metrics(USER_ID)
+        with self._patch_merge(garmin, []):
+            b = get_merged_daily_metrics(USER_ID)
         assert a is not b

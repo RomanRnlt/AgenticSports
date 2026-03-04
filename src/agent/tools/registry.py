@@ -119,9 +119,13 @@ def get_restricted_tools(user_model) -> ToolRegistry:
     from src.agent.tools.analysis_tools import register_analysis_tools
     from src.agent.tools.calc_tools import register_calc_tools
     from src.agent.tools.health_tools import register_health_tools
+    from src.agent.tools.health_trend_tools import register_health_trend_tools
+    from src.agent.tools.health_inventory_tools import register_health_inventory_tools
 
     register_data_tools(registry, user_model)
     register_health_tools(registry)
+    register_health_trend_tools(registry)
+    register_health_inventory_tools(registry)
     register_analysis_tools(registry)
     register_calc_tools(registry, user_model)
 
@@ -152,12 +156,16 @@ def get_default_tools(user_model, context: str = "coach") -> ToolRegistry:
     from src.agent.tools.calc_tools import register_calc_tools
 
     from src.agent.tools.health_tools import register_health_tools
+    from src.agent.tools.health_trend_tools import register_health_trend_tools
+    from src.agent.tools.health_inventory_tools import register_health_inventory_tools
 
     from src.agent.tools.checkpoint_tools import register_checkpoint_tools
     from src.agent.tools.self_improvement_tools import register_self_improvement_tools
 
     register_data_tools(registry, user_model)
     register_health_tools(registry)
+    register_health_trend_tools(registry)
+    register_health_inventory_tools(registry)
     register_analysis_tools(registry)
     register_planning_tools(registry, user_model)
     register_memory_tools(registry, user_model)
