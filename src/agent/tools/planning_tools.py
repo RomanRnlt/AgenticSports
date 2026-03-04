@@ -74,6 +74,68 @@ def _build_recovery_planning_context(user_id: str | None) -> str | None:
         return None  # Non-critical — plan generation continues without recovery context
 
 
+def _build_macrocycle_week_context(week_number: int, settings=None) -> str | None:
+    """Load the active macrocycle and extract context for the given week.
+
+    Returns a formatted string for prompt injection, or None on failure.
+    """
+    try:
+        if settings is None:
+            settings = get_settings()
+        if not settings.use_supabase:
+            return None
+
+        from src.db.macrocycle_db import get_active_macrocycle
+        macrocycle = get_active_macrocycle(settings.agenticsports_user_id)
+        if not macrocycle:
+            return None
+
+        weeks = macrocycle.get("weeks", [])
+        # Find the matching week
+        target_week = None
+        for w in weeks:
+            if w.get("week_number") == week_number:
+                target_week = w
+                break
+
+        if not target_week:
+            return None
+
+        lines = [
+            f"MACROCYCLE CONTEXT (Week {week_number} of {macrocycle.get('total_weeks', '?')}):",
+            f"  Macrocycle: {macrocycle.get('name', 'Unknown')}",
+            f"  Phase: {target_week.get('phase', 'Unknown')}",
+            f"  Focus: {target_week.get('focus', 'Not specified')}",
+        ]
+
+        volume = target_week.get("volume_target", {})
+        if volume:
+            lines.append(f"  Volume target: {volume.get('total_minutes', '?')} min, {volume.get('total_sessions', '?')} sessions")
+
+        intensity = target_week.get("intensity_distribution", {})
+        if intensity:
+            lines.append(
+                f"  Intensity: {intensity.get('low', '?')}% low, "
+                f"{intensity.get('moderate', '?')}% moderate, "
+                f"{intensity.get('high', '?')}% high"
+            )
+
+        key_sessions = target_week.get("key_sessions", [])
+        if key_sessions:
+            lines.append(f"  Key sessions: {', '.join(key_sessions)}")
+
+        notes = target_week.get("notes")
+        if notes:
+            lines.append(f"  Notes: {notes}")
+
+        lines.append("")
+        lines.append("Design this week's training plan to match the macrocycle targets above.")
+        return "\n".join(lines)
+
+    except Exception:
+        return None  # Non-critical — plan generation continues without macrocycle context
+
+
 def register_planning_tools(registry: ToolRegistry, user_model):
     """Register all planning tools."""
     _settings = get_settings()
@@ -82,6 +144,7 @@ def register_planning_tools(registry: ToolRegistry, user_model):
         focus: str = None,
         feedback: str = None,
         sport_distribution: dict = None,
+        macrocycle_week: int = None,
     ) -> dict:
         """Generate a training plan using the coach persona."""
         from src.agent.prompts import COACH_SYSTEM_PROMPT, build_plan_prompt
@@ -118,6 +181,12 @@ def register_planning_tools(registry: ToolRegistry, user_model):
         if recovery_context:
             base_prompt += f"\n\nCURRENT RECOVERY STATUS:\n{recovery_context}"
 
+        # Inject macrocycle week context when specified
+        if macrocycle_week is not None:
+            macro_context = _build_macrocycle_week_context(macrocycle_week, settings=_settings)
+            if macro_context:
+                base_prompt += f"\n\n{macro_context}"
+
         if focus:
             base_prompt += f"\n\nFOCUS FOR THIS PLAN: {focus}"
         if feedback:
@@ -133,6 +202,8 @@ def register_planning_tools(registry: ToolRegistry, user_model):
 
         plan = extract_json(response.choices[0].message.content.strip())
         plan["_generated_at"] = datetime.now().isoformat()
+        if macrocycle_week is not None:
+            plan["_macrocycle_week"] = macrocycle_week
         return plan
 
     registry.register(Tool(
@@ -162,6 +233,11 @@ def register_planning_tools(registry: ToolRegistry, user_model):
                 "sport_distribution": {
                     "type": "object",
                     "description": "Requested session counts per sport (e.g., {\"running\": 3, \"cycling\": 2})",
+                    "nullable": True,
+                },
+                "macrocycle_week": {
+                    "type": "integer",
+                    "description": "Week number from active macrocycle to use as context for this plan",
                     "nullable": True,
                 },
             },

@@ -155,6 +155,151 @@ RULES:
 """
 
 
+MACROCYCLE_SYSTEM_PROMPT = """\
+You are an experienced sports coach creating a macrocycle training plan.
+
+A macrocycle is a multi-week training structure (4-52 weeks) that defines:
+- Training phases (e.g., base, build, peak, taper — or sport-appropriate phases)
+- Weekly volume targets and intensity distribution for each phase
+- Key sessions that define the character of each week
+- Progressive overload and recovery patterns
+
+Guidelines:
+- Design phases appropriate for the athlete's goal and timeline
+- Each phase should have a clear purpose and progression logic
+- Volume and intensity should progress logically across phases
+- Include recovery/deload weeks (typically every 3-4 weeks)
+- Intensity distribution should follow polarized or pyramidal principles
+- Key sessions define the most important workouts of each week
+- If a periodization model is provided, follow its phase structure
+- If no model is provided, design appropriate phases based on goal and timeline
+- Be conservative for athletes with unknown fitness levels
+- Consider the athlete's available training time and sport preferences
+
+You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no code fences — just the raw JSON object.
+
+The JSON must follow this exact structure:
+{
+  "weeks": [
+    {
+      "week_number": 1,
+      "phase": "Base",
+      "focus": "Aerobic endurance",
+      "volume_target": {"total_minutes": 300, "total_sessions": 5},
+      "intensity_distribution": {"low": 80, "moderate": 15, "high": 5},
+      "key_sessions": ["Long easy run 60min", "Tempo 30min"],
+      "notes": "First week of base building"
+    }
+  ]
+}
+
+Rules for the weeks array:
+- week_number is sequential starting from 1
+- phase groups weeks into training blocks (e.g., "Base 1", "Build", "Peak", "Taper")
+- focus describes the primary training emphasis for that week
+- volume_target includes total_minutes and total_sessions for the week
+- intensity_distribution percentages must sum to 100 (low + moderate + high)
+- key_sessions lists the 2-4 most important workouts of the week
+- notes provides coaching context for the week
+- Include deload weeks with reduced volume (typically 60-70% of peak week)
+- Volume should build progressively within each phase
+"""
+
+
+def build_macrocycle_prompt(
+    profile: dict,
+    total_weeks: int,
+    beliefs: list[dict] | None = None,
+    activities: list[dict] | None = None,
+    health_summary: dict | None = None,
+    periodization_model: dict | None = None,
+) -> str:
+    """Build the user prompt with athlete context for macrocycle creation.
+
+    Args:
+        profile: Athlete profile dict with goal, constraints, fitness, sports.
+        total_weeks: Total number of weeks for the macrocycle (4-52).
+        beliefs: Optional list of active beliefs for coach's notes.
+        activities: Optional list of recent activity dicts for context.
+        health_summary: Optional health summary for recovery awareness.
+        periodization_model: Optional periodization model to follow.
+    """
+    goal = profile.get("goal", {})
+    constraints = profile.get("constraints", {})
+    fitness = profile.get("fitness", {})
+    sports = profile.get("sports", [])
+
+    fitness_info = ""
+    if fitness.get("estimated_vo2max"):
+        fitness_info += f"- Estimated VO2max: {fitness['estimated_vo2max']}\n"
+    if fitness.get("threshold_pace_min_km"):
+        fitness_info += f"- Threshold pace: {fitness['threshold_pace_min_km']} min/km\n"
+    if fitness.get("weekly_volume_km"):
+        fitness_info += f"- Current weekly volume: {fitness['weekly_volume_km']} km\n"
+    if not fitness_info:
+        fitness_info = "- No fitness data available (assume beginner/unknown level)\n"
+
+    beliefs_section = _format_beliefs_section(beliefs)
+
+    # Recent activity context
+    activity_section = ""
+    if activities:
+        recent = activities[:10]  # Last 10 activities for context
+        lines = ["RECENT TRAINING ACTIVITY (last 28 days):"]
+        for act in recent:
+            sport = act.get("sport", "unknown")
+            duration = act.get("duration_minutes", "?")
+            act_date = act.get("date", act.get("start_time", "?"))
+            lines.append(f"  - {sport}: {duration} min on {act_date}")
+        activity_section = "\n".join(lines) + "\n"
+
+    # Health context
+    health_section = ""
+    if health_summary and health_summary.get("data_available"):
+        latest = health_summary.get("latest", {})
+        parts = []
+        if latest.get("sleep_score") is not None:
+            parts.append(f"Sleep score: {latest['sleep_score']}")
+        if latest.get("hrv") is not None:
+            parts.append(f"HRV: {latest['hrv']}")
+        if latest.get("resting_hr") is not None:
+            parts.append(f"Resting HR: {latest['resting_hr']}")
+        if parts:
+            health_section = f"CURRENT HEALTH STATUS: {', '.join(parts)}\n"
+
+    # Periodization model context
+    periodization_section = ""
+    if periodization_model:
+        model_name = periodization_model.get("name", "custom")
+        phases = periodization_model.get("phases", [])
+        lines = [f"PERIODIZATION MODEL: {model_name}"]
+        lines.append("Follow this phase structure:")
+        for phase in phases:
+            phase_name = phase.get("name", "?")
+            weeks = phase.get("weeks", "?")
+            focus = phase.get("focus", "")
+            lines.append(f"  - {phase_name}: {weeks} weeks — {focus}")
+        periodization_section = "\n".join(lines) + "\n"
+
+    return f"""\
+Create a {total_weeks}-week macrocycle training plan for this athlete:
+
+Sports: {', '.join(sports) if sports else 'General fitness'}
+Goal event: {goal.get('event', 'General fitness')}
+Target date: {goal.get('target_date', 'Not set')}
+Target time: {goal.get('target_time', 'Not set')}
+
+Fitness level:
+{fitness_info}
+Constraints:
+- Training days per week: {constraints.get('training_days_per_week', 5)}
+- Max session duration: {constraints.get('max_session_minutes', 90)} minutes
+
+{periodization_section}{activity_section}{health_section}{beliefs_section}
+Generate a {total_weeks}-week macrocycle plan starting from today ({date.today().isoformat()}).
+"""
+
+
 def _format_beliefs_section(beliefs: list[dict] | None) -> str:
     """Format active beliefs as a COACH'S NOTES section for prompt injection (PrefEval pattern).
 
