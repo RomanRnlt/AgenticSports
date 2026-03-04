@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # -- Tool output budget (tokens) ------------------------------------------
     tool_output_budget_default: int = 2000
 
+    # -- Product Recommendations / Affiliate -----------------------------------
+    amazon_affiliate_tag: str = ""
+    amazon_pa_api_access_key: str = ""
+    amazon_pa_api_secret_key: str = ""
+    awin_affiliate_id: str = ""
+    awin_adidas_merchant_id: str = ""
+
     # -- Data (legacy file-based, kept for gradual migration) -----------------
     data_dir: str = "data"
 
