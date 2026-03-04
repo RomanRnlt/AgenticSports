@@ -102,55 +102,30 @@ def _clean_parameters(schema: dict) -> dict:
     return cleaned
 
 
-def execute_with_budget(
-    tool_registry: "ToolRegistry",
-    name: str,
-    args: dict,
-    budget_tokens: int = 2000,
-) -> dict:
-    """Execute a tool and truncate its result if it exceeds the token budget.
 
-    Token estimation: 4 characters ≈ 1 token (rough GPT/Gemini average).
+def get_restricted_tools(user_model) -> ToolRegistry:
+    """Create a restricted tool registry for background sub-agents.
 
-    Args:
-        tool_registry: The registry to dispatch the call through.
-        name: Tool name.
-        args: Tool arguments.
-        budget_tokens: Maximum allowed tokens in the result text. Uses the
-            per-tool budget map when available, falling back to budget_tokens.
+    Only includes safe, read-oriented tools — no notifications, spawning,
+    onboarding, or config-mutation tools.
 
-    Returns:
-        The tool result dict, possibly with string fields truncated.
+    Allowed categories: data, analysis, calc, session/memory (read-only).
+    Blocked: send_notification, spawn_background_task, define_metric,
+             complete_onboarding, consolidate_episodes.
     """
-    import json as _json
+    registry = ToolRegistry()
 
-    per_tool_budget: dict[str, int] = {
-        "get_activities": 1500,
-        "analyze_training_load": 800,
-        "web_search": 1200,
-        "create_training_plan": 2000,
-    }
-    effective_budget = per_tool_budget.get(name, budget_tokens)
+    from src.agent.tools.data_tools import register_data_tools
+    from src.agent.tools.analysis_tools import register_analysis_tools
+    from src.agent.tools.calc_tools import register_calc_tools
+    from src.agent.tools.health_tools import register_health_tools
 
-    result = tool_registry.execute(name, args)
+    register_data_tools(registry, user_model)
+    register_health_tools(registry)
+    register_analysis_tools(registry)
+    register_calc_tools(registry, user_model)
 
-    # Estimate size via JSON serialisation
-    try:
-        text = _json.dumps(result)
-    except (TypeError, ValueError):
-        text = str(result)
-
-    char_budget = effective_budget * 4
-    if len(text) > char_budget:
-        n_tokens = len(text) // 4
-        truncated = text[:char_budget]
-        return {
-            "result": truncated,
-            "_truncated": True,
-            "_note": f"... [truncated, {n_tokens} tokens]",
-        }
-
-    return result
+    return registry
 
 
 def get_default_tools(user_model, context: str = "coach") -> ToolRegistry:

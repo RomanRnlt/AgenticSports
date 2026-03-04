@@ -106,12 +106,28 @@ def register_planning_tools(registry: ToolRegistry, user_model):
     ))
 
     def evaluate_plan(plan: dict) -> dict:
-        """Evaluate plan quality with an independent reviewer persona."""
+        """Evaluate plan quality with an independent reviewer persona.
+
+        Uses agent-defined eval criteria from DB when available,
+        otherwise falls back to hardcoded criteria.
+        """
         from src.agent.plan_evaluator import evaluate_plan as _evaluate
+        from src.agent.plan_evaluator import evaluate_plan_dynamic
 
         profile = user_model.project_profile()
         beliefs = user_model.get_active_beliefs(min_confidence=0.6)
-        evaluation = _evaluate(plan, profile, beliefs=beliefs)
+
+        # Use dynamic evaluation if user has DB-defined criteria
+        user_id = None
+        if hasattr(user_model, "user_id"):
+            user_id = user_model.user_id
+
+        if user_id:
+            evaluation = evaluate_plan_dynamic(
+                plan, profile, user_id=user_id, beliefs=beliefs,
+            )
+        else:
+            evaluation = _evaluate(plan, profile, beliefs=beliefs)
 
         return {
             "score": evaluation.score,

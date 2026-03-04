@@ -186,6 +186,25 @@ async def _chat_event_generator(
         # knows which session this stream belongs to.
         yield SSEEmitter.session_start(resolved_session_id)
 
+        # Summarize the PREVIOUS session asynchronously (non-blocking).
+        if session_id is None:
+            # New session → summarize the last one in the background.
+            try:
+                from src.services.session_summarizer import summarize_previous_session
+                asyncio.create_task(
+                    summarize_previous_session(user_id),
+                    name=f"summarize_{user_id}",
+                )
+            except Exception:
+                logger.debug("Session summarization skipped", exc_info=True)
+
+            # Config GC: clean up stale configs in the background.
+            try:
+                from src.services.config_gc import run_config_gc
+                asyncio.to_thread(run_config_gc, user_id)
+            except Exception:
+                logger.debug("Config GC skipped", exc_info=True)
+
         # Inject checkpoint context (recently resolved pending actions)
         try:
             from src.db.pending_actions_db import get_recently_resolved

@@ -27,6 +27,7 @@ from src.db.episodes_db import (
     get_episode,
     list_episodes,
     list_episodes_by_type,
+    list_episodes_for_period,
     store_episode,
 )
 from src.db.plans_db import (
@@ -62,6 +63,7 @@ from src.db.session_store_db import (
     create_session,
     get_recent_sessions,
     get_session,
+    get_unsummarized_sessions,
     load_session_messages,
     save_message,
     update_session_summary,
@@ -87,12 +89,14 @@ __all__ = [
     "save_message",
     "load_session_messages",
     "get_recent_sessions",
+    "get_unsummarized_sessions",
     "update_session_summary",
     # episodes_db
     "store_episode",
     "list_episodes",
     "get_episode",
     "list_episodes_by_type",
+    "list_episodes_for_period",
     # health_data_db
     "list_health_activities",
     "list_garmin_activities",

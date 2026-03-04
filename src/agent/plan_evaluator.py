@@ -132,6 +132,105 @@ def evaluate_plan(
     )
 
 
+def evaluate_plan_dynamic(
+    plan: dict,
+    profile: dict,
+    user_id: str,
+    beliefs: list[dict] | None = None,
+    assessment: dict | None = None,
+) -> PlanEvaluation:
+    """Score a plan using agent-defined eval criteria from the DB.
+
+    Falls back to hardcoded criteria if no eval_criteria are defined for
+    the user (graceful degradation).
+
+    Args:
+        plan: The generated training plan dict.
+        profile: Athlete profile dict.
+        user_id: The user's ID for fetching eval criteria from DB.
+        beliefs: Optional active beliefs for preference checking.
+        assessment: Optional recent assessment for context.
+
+    Returns:
+        PlanEvaluation with score, criteria, issues, and suggestions.
+    """
+    from src.db.agent_config_db import get_eval_criteria
+
+    try:
+        db_criteria = get_eval_criteria(user_id)
+    except Exception:
+        db_criteria = []
+
+    if not db_criteria:
+        return evaluate_plan(plan, profile, beliefs=beliefs, assessment=assessment)
+
+    system_prompt = _build_dynamic_system_prompt(db_criteria)
+    prompt = _build_evaluation_prompt(plan, profile, beliefs, assessment)
+
+    response = chat_completion(
+        messages=[{"role": "user", "content": prompt}],
+        system_prompt=system_prompt,
+        temperature=0.2,
+    )
+
+    text = response.choices[0].message.content.strip()
+    result = extract_json(text)
+
+    return PlanEvaluation(
+        score=result.get("overall_score", 0),
+        criteria_scores=result.get("criteria", {}),
+        issues=result.get("issues", []),
+        suggestions=result.get("suggestions", []),
+    )
+
+
+def _build_dynamic_system_prompt(criteria: list[dict]) -> str:
+    """Build an evaluation system prompt from agent-defined criteria."""
+    # Normalize weights to percentages
+    total_weight = sum(c.get("weight", 1.0) for c in criteria)
+    if total_weight == 0:
+        total_weight = 1.0
+
+    criteria_lines = []
+    criteria_names = []
+    for c in criteria:
+        name = c.get("name", "unnamed")
+        desc = c.get("description", "No description")
+        weight = c.get("weight", 1.0)
+        pct = round((weight / total_weight) * 100)
+        criteria_names.append(name)
+        criteria_lines.append(f"- {name} ({pct}%): {desc}")
+
+    criteria_json = ",\n        ".join(f'"{n}": 75' for n in criteria_names)
+
+    return f"""\
+You are evaluating a training plan for an athlete (any sport). Score each criterion 0-100.
+
+Be STRICT -- a perfect plan is rare.
+
+You MUST respond with ONLY a valid JSON object. No markdown, no explanation.
+
+{{
+    "overall_score": 72,
+    "criteria": {{
+        {criteria_json}
+    }},
+    "issues": [
+        "Specific issue with the plan (reference session days/sports)"
+    ],
+    "suggestions": [
+        "Specific improvement to make"
+    ]
+}}
+
+Scoring guide (score each 0-100):
+{chr(10).join(criteria_lines)}
+
+The overall_score should be a weighted average of the individual criterion scores,
+using the percentages shown above.
+"""
+
+
 def _build_evaluation_prompt(
     plan: dict,
     profile: dict,

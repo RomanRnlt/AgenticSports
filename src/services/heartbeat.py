@@ -92,6 +92,30 @@ class HeartbeatService:
         if self._tick_count % 12 == 0:
             await self._run_self_improvement(user_ids)
 
+        # Episode consolidation check every 48th tick (~24 hours at 30min interval)
+        if self._tick_count % 48 == 0:
+            await self._run_episode_consolidation(user_ids)
+
+    async def _run_episode_consolidation(self, user_ids: list[str]) -> None:
+        """Check for unconsolidated months and consolidate them."""
+        try:
+            from src.services.episode_consolidation import (
+                consolidate_month,
+                get_unconsolidated_months,
+            )
+
+            for user_id in user_ids:
+                try:
+                    months = await get_unconsolidated_months(user_id)
+                    for month in months[:2]:  # Max 2 months per tick
+                        await consolidate_month(user_id, month)
+                except Exception as exc:
+                    logger.debug(
+                        "Episode consolidation skip for %s: %s", user_id, exc,
+                    )
+        except Exception as exc:
+            logger.error("Episode consolidation check failed: %s", exc)
+
     async def _run_self_improvement(self, user_ids: list[str]) -> None:
         """Queue self-improvement checks for users with metric definitions."""
         try:

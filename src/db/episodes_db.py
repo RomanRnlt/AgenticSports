@@ -91,6 +91,37 @@ def get_episode(user_id: str, episode_id: str) -> dict | None:
     return result.data if result is not None else None
 
 
+def list_episodes_for_period(
+    user_id: str,
+    episode_type: str,
+    period_start: str,
+    period_end: str,
+) -> list[dict]:
+    """List episodes of a given type within a date range.
+
+    Args:
+        user_id: UUID of the owning user.
+        episode_type: E.g. ``"weekly_reflection"``.
+        period_start: Start date (inclusive, ISO format).
+        period_end: End date (exclusive, ISO format).
+
+    Returns:
+        List of episode dicts ordered by ``period_start`` ascending.
+    """
+    result = (
+        get_supabase()
+        .table("episodes")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("episode_type", episode_type)
+        .gte("period_start", period_start)
+        .lt("period_start", period_end)
+        .order("period_start", desc=False)
+        .execute()
+    )
+    return result.data
+
+
 def list_episodes_by_type(
     user_id: str,
     episode_type: str,

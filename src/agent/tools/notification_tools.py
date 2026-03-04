@@ -2,12 +2,13 @@
 
 Provides two agent-callable tools:
     - send_notification: sends an Expo push notification to a user.
-    - spawn_background_task: fires a sub-agent asynchronously (skeleton).
+    - spawn_background_task: fires a sub-agent asynchronously.
 
 Both tools follow the immutable-result pattern: they return a new dict
 describing the outcome without mutating any shared state.
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -22,6 +23,12 @@ _EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 # Timeout for Expo API requests (seconds).
 _HTTP_TIMEOUT = 10.0
+
+# Active background tasks per user — resource guard.
+_active_tasks: dict[str, dict[str, asyncio.Task]] = {}
+
+# Maximum concurrent background tasks per user.
+_MAX_CONCURRENT_TASKS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -38,8 +45,6 @@ def register_notification_tools(registry: ToolRegistry, user_id: str) -> None:
         data: dict | None = None,
     ) -> dict:
         """Send a push notification to the current user."""
-        import asyncio
-
         try:
             try:
                 loop = asyncio.get_running_loop()
@@ -98,7 +103,17 @@ def register_notification_tools(registry: ToolRegistry, user_id: str) -> None:
         max_iterations: int = 15,
     ) -> dict:
         """Spawn a background sub-agent for a long-running task."""
-        import asyncio
+
+        # Resource guard: max concurrent tasks per user
+        active_count = _get_active_task_count(user_id)
+        if active_count >= _MAX_CONCURRENT_TASKS:
+            return {
+                "spawned": False,
+                "error": f"Too many concurrent tasks ({active_count}/{_MAX_CONCURRENT_TASKS}). Wait for existing tasks to finish.",
+            }
+
+        # Clamp max_iterations
+        max_iterations = min(max_iterations, 30)
 
         task_id = _make_task_id()
         logger.info(
@@ -115,12 +130,21 @@ def register_notification_tools(registry: ToolRegistry, user_id: str) -> None:
                 loop = None
 
             if loop is not None and loop.is_running():
-                loop.create_task(
+                task = loop.create_task(
                     _run_background_task(task_id, user_id, instruction, max_iterations),
                     name=f"bg_task_{task_id}",
                 )
+
+                # Register in active tasks
+                if user_id not in _active_tasks:
+                    _active_tasks[user_id] = {}
+                _active_tasks[user_id][task_id] = task
+
+                # Auto-cleanup callback
+                task.add_done_callback(
+                    lambda _t: _cleanup_done_task(user_id, task_id),
+                )
             else:
-                # Sync context — we can't truly fire-and-forget here.
                 logger.warning(
                     "spawn_background_task called outside async context; task %s deferred",
                     task_id,
@@ -129,7 +153,7 @@ def register_notification_tools(registry: ToolRegistry, user_id: str) -> None:
             logger.error("Failed to spawn background task %s: %s", task_id, exc)
             return {"spawned": False, "task_id": task_id, "error": str(exc)}
 
-        return {"spawned": True, "task_id": task_id}
+        return {"spawned": True, "task_id": task_id, "active_tasks": active_count + 1}
 
     registry.register(Tool(
         name="spawn_background_task",
@@ -264,26 +288,118 @@ def _make_task_id() -> str:
     return f"bg_{uuid.uuid4().hex[:8]}"
 
 
+def _get_active_task_count(user_id: str) -> int:
+    """Count active (non-done) background tasks for a user."""
+    user_tasks = _active_tasks.get(user_id, {})
+    return sum(1 for t in user_tasks.values() if not t.done())
+
+
+def _cleanup_done_task(user_id: str, task_id: str) -> None:
+    """Remove a completed task from the active tasks registry."""
+    user_tasks = _active_tasks.get(user_id)
+    if user_tasks and task_id in user_tasks:
+        del user_tasks[task_id]
+        if not user_tasks:
+            del _active_tasks[user_id]
+    logger.debug("Background task %s cleaned up for user %s", task_id, user_id)
+
+
 async def _run_background_task(
     task_id: str,
     user_id: str,
     instruction: str,
     max_iterations: int,
 ) -> None:
-    """Run a sub-agent with limited tools for a background task.
+    """Run a sub-agent with restricted tools for a background task.
 
-    TODO: Wire up a restricted agent loop here (data + calc tools only).
-    The sub-agent result should be delivered back to the user via
-    send_notification_async().
+    Uses a restricted AgentLoop with only data, analysis, calc, and health
+    tools. Results are delivered via push notification.
+
+    Args:
+        task_id: Unique identifier for this task.
+        user_id: UUID of the user who spawned the task.
+        instruction: Natural-language instruction for the sub-agent.
+        max_iterations: Maximum tool-call rounds.
     """
     logger.info(
         "Background task %s started for user %s (max_iter=%d)",
-        task_id,
-        user_id,
-        max_iterations,
+        task_id, user_id, max_iterations,
     )
-    # Placeholder — real implementation:
-    # 1. Build a restricted ToolRegistry (data_tools + analysis_tools only).
-    # 2. Run AgentLoop(user_id, tools=restricted_registry, max_tool_rounds=max_iterations).
-    # 3. Send result notification via send_notification_async().
-    logger.info("Background task %s completed (stub)", task_id)
+
+    try:
+        from src.agent.agent_loop import create_restricted_loop
+        from src.db.user_model_db import UserModelDB
+
+        # Load user model in thread pool (sync operation)
+        user_model = await asyncio.to_thread(UserModelDB.load_or_create, user_id)
+
+        # Create restricted agent loop
+        loop = create_restricted_loop(user_model, max_tool_rounds=max_iterations)
+        loop.start_session()
+
+        # Inject subagent system context
+        system_context = (
+            "Du bist ein Analyse-Subagent. Du hast nur Zugriff auf Daten-, "
+            "Analyse- und Berechnungs-Tools. Fasse dein Ergebnis am Ende "
+            "in einer kurzen, klaren Zusammenfassung zusammen."
+        )
+        loop.inject_context("user", f"[System: {system_context}]")
+
+        # Run the agent synchronously in thread pool
+        result = await asyncio.to_thread(loop.process_message, instruction)
+
+        # Deliver result via push notification
+        response_text = result.response_text or "Analyse abgeschlossen."
+        # Truncate for notification body
+        notification_body = response_text[:180]
+        if len(response_text) > 180:
+            notification_body += "..."
+
+        await send_notification_async(
+            user_id=user_id,
+            title=f"Analyse fertig ({task_id})",
+            body=notification_body,
+            data={
+                "task_id": task_id,
+                "full_result": response_text[:2000],
+                "tool_calls": result.tool_calls_made,
+            },
+        )
+
+        # Also queue as proactive message for next chat session
+        try:
+            from src.agent.proactive import queue_proactive_message
+            await asyncio.to_thread(
+                queue_proactive_message,
+                user_id=user_id,
+                trigger={
+                    "type": "background_task_result",
+                    "data": {
+                        "task_id": task_id,
+                        "result": response_text[:4000],
+                        "tool_calls": result.tool_calls_made,
+                    },
+                },
+                priority=0.7,
+            )
+        except Exception:
+            logger.debug("Proactive queue for bg task result skipped", exc_info=True)
+
+        logger.info(
+            "Background task %s completed: %d tool calls, %d ms",
+            task_id, result.tool_calls_made, result.total_duration_ms,
+        )
+
+    except Exception as exc:
+        logger.error("Background task %s failed: %s", task_id, exc, exc_info=True)
+
+        # Notify user of failure
+        try:
+            await send_notification_async(
+                user_id=user_id,
+                title="Analyse fehlgeschlagen",
+                body=f"Aufgabe {task_id} konnte nicht abgeschlossen werden.",
+                data={"task_id": task_id, "error": str(exc)[:200]},
+            )
+        except Exception:
+            logger.debug("Failure notification skipped", exc_info=True)

@@ -247,3 +247,78 @@ def register_memory_tools(registry: ToolRegistry, user_model):
         },
         category="memory",
     ))
+
+    def consolidate_episodes(month: str = "") -> dict:
+        """Trigger monthly episode consolidation.
+
+        Consolidates weekly reflections into a monthly review summary.
+        If no month is specified, checks for any unconsolidated months.
+        """
+        import asyncio
+
+        if not _settings.use_supabase:
+            return {"status": "error", "error": "Supabase not configured"}
+
+        uid = user_model.user_id if hasattr(user_model, "user_id") else _settings.agenticsports_user_id
+
+        try:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            from src.services.episode_consolidation import (
+                consolidate_month,
+                get_unconsolidated_months,
+            )
+
+            async def _run():
+                if month:
+                    result = await consolidate_month(uid, month)
+                    if result:
+                        return {"status": "success", "month": month, **result}
+                    return {"status": "skipped", "reason": "Not enough weekly reflections"}
+
+                months = await get_unconsolidated_months(uid)
+                if not months:
+                    return {"status": "ok", "message": "No months need consolidation"}
+
+                results = []
+                for m in months[:3]:
+                    r = await consolidate_month(uid, m)
+                    if r:
+                        results.append({"month": m, **r})
+                return {
+                    "status": "success",
+                    "consolidated": results,
+                    "count": len(results),
+                }
+
+            if loop is not None and loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(_run(), loop)
+                return future.result(timeout=60)
+            else:
+                return asyncio.run(_run())
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+    registry.register(Tool(
+        name="consolidate_episodes",
+        description=(
+            "Consolidate weekly training reflections into monthly review summaries. "
+            "Identifies recurring patterns and promotes them to beliefs. "
+            "Call without arguments to auto-detect months needing consolidation, "
+            "or specify a month (YYYY-MM) to consolidate a specific month."
+        ),
+        handler=consolidate_episodes,
+        parameters={
+            "type": "object",
+            "properties": {
+                "month": {
+                    "type": "string",
+                    "description": "Month to consolidate (YYYY-MM format). Leave empty for auto-detect.",
+                },
+            },
+        },
+        category="memory",
+    ))

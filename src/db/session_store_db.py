@@ -159,6 +159,33 @@ def get_recent_sessions(user_id: str, limit: int = 10) -> list[dict]:
     return result.data
 
 
+def get_unsummarized_sessions(
+    user_id: str,
+    limit: int = 5,
+) -> list[dict]:
+    """Get sessions that have no compressed_summary yet.
+
+    Args:
+        user_id: UUID of the owning user.
+        limit: Maximum number of sessions to return.
+
+    Returns:
+        List of session dicts ordered by ``started_at`` descending
+        (most recent first), filtered to those with NULL compressed_summary.
+    """
+    result = (
+        get_supabase()
+        .table("sessions")
+        .select("*")
+        .eq("user_id", user_id)
+        .is_("compressed_summary", "null")
+        .order("started_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data
+
+
 def update_session_summary(
     session_id: str,
     compressed_summary: str,
