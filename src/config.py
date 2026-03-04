@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     max_consecutive_errors: int = 3
     compression_threshold: int = 40
     compression_keep_rounds: int = 4
+    daily_token_budget: int = 500_000  # Max tokens per user per day
 
     # -- User / multi-tenancy -------------------------------------------------
     agenticsports_user_id: str = ""  # Set for Supabase mode; leave empty for file-based
@@ -62,6 +63,9 @@ class Settings(BaseSettings):
 
     # -- Heartbeat / proactive ------------------------------------------------
     heartbeat_interval_seconds: int = 1800  # 30 minutes
+
+    # -- Garmin sync ----------------------------------------------------------
+    garmin_sync_cooldown_seconds: int = 900  # 15 min between syncs
 
     # -- Tool output budget (tokens) ------------------------------------------
     tool_output_budget_default: int = 2000

@@ -119,6 +119,10 @@ def create_app() -> FastAPI:
     from src.api.routers.webhook import router as webhook_router
     app.include_router(webhook_router, prefix="/webhook", tags=["webhooks"])
 
+    # Garmin sync router — connect, sync, disconnect Garmin accounts.
+    from src.api.routers.garmin import router as garmin_router
+    app.include_router(garmin_router, prefix="/garmin", tags=["garmin"])
+
     # -- Health endpoint ------------------------------------------------------
 
     @app.get("/health", tags=["meta"])

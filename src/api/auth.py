@@ -86,3 +86,10 @@ def get_current_user(
         "email": payload.get("email"),
         "role": payload.get("role", "authenticated"),
     }
+
+
+def get_user_id(
+    current_user: Annotated[dict, Depends(get_current_user)],
+) -> str:
+    """Extract user_id (UUID) from JWT — convenience dependency."""
+    return current_user["sub"]

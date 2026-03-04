@@ -367,6 +367,13 @@ class AgentLoop:
                 temperature=AGENT_TEMPERATURE,
             )
 
+            # Track usage (non-blocking, fire-and-forget)
+            try:
+                from src.services.usage_tracker import track_usage
+                track_usage(self._user_id, response)
+            except Exception:
+                pass  # Non-critical — never block agent loop
+
             message = response.choices[0].message
             content = message.content
             tool_calls = message.tool_calls

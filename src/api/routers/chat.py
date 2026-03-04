@@ -306,6 +306,11 @@ async def post_chat(
 ) -> EventSourceResponse:
     """Stream an agent response for a single chat turn."""
     user_id: str = current_user["sub"]
+
+    from src.services.usage_tracker import check_budget
+    if not check_budget(user_id):
+        raise HTTPException(status_code=429, detail="Daily token budget exceeded")
+
     redis = await _get_redis()
 
     generator = _chat_event_generator(

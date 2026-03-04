@@ -121,6 +121,7 @@ def get_restricted_tools(user_model) -> ToolRegistry:
     from src.agent.tools.health_tools import register_health_tools
     from src.agent.tools.health_trend_tools import register_health_trend_tools
     from src.agent.tools.health_inventory_tools import register_health_inventory_tools
+    from src.agent.tools.goal_trajectory_tools import register_goal_trajectory_tools
 
     register_data_tools(registry, user_model)
     register_health_tools(registry)
@@ -128,6 +129,7 @@ def get_restricted_tools(user_model) -> ToolRegistry:
     register_health_inventory_tools(registry)
     register_analysis_tools(registry)
     register_calc_tools(registry, user_model)
+    register_goal_trajectory_tools(registry)
 
     return registry
 
@@ -162,6 +164,9 @@ def get_default_tools(user_model, context: str = "coach") -> ToolRegistry:
     from src.agent.tools.checkpoint_tools import register_checkpoint_tools
     from src.agent.tools.self_improvement_tools import register_self_improvement_tools
     from src.agent.tools.product_tools import register_product_tools
+    from src.agent.tools.goal_trajectory_tools import register_goal_trajectory_tools
+    from src.agent.tools.macrocycle_tools import register_macrocycle_tools
+    from src.agent.tools.garmin_tools import register_garmin_tools
 
     register_data_tools(registry, user_model)
     register_health_tools(registry)
@@ -177,6 +182,9 @@ def get_default_tools(user_model, context: str = "coach") -> ToolRegistry:
     register_checkpoint_tools(registry, user_model)
     register_self_improvement_tools(registry, user_model)
     register_product_tools(registry, user_model)
+    register_goal_trajectory_tools(registry, user_model)
+    register_macrocycle_tools(registry, user_model)
+    register_garmin_tools(registry, user_model)
 
     if context == "onboarding":
         from src.agent.tools.onboarding_tools import register_onboarding_tools
