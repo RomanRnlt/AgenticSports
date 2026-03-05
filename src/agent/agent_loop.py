@@ -33,7 +33,7 @@ from typing import Callable
 from src.agent.llm import MODEL, chat_completion
 from src.agent.tools.registry import ToolRegistry, get_default_tools, get_restricted_tools
 from src.agent.tools.truncation import execute_with_budget
-from src.agent.system_prompt import build_system_prompt
+from src.agent.system_prompt import STATIC_SYSTEM_PROMPT, build_runtime_context
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -334,15 +334,25 @@ class AgentLoop:
         start_time = time.time()
         result = AgentResult(response_text="")
 
-        # Build system prompt with current context
-        system_prompt = build_system_prompt(
-            self.user_model,
-            startup_context=self.startup_context,
-            context=self.context,
-        )
+        # System prompt is STATIC -- identical for all users/requests.
+        # LLM providers cache this automatically when it never changes.
+        system_prompt = STATIC_SYSTEM_PROMPT
 
         # Compress history before adding new message (Gap 2)
         self._compress_history()
+
+        # Inject runtime context as FIRST user message (before the athlete's message).
+        # This keeps the system prompt cacheable while providing per-request context.
+        runtime_ctx = build_runtime_context(
+            user_model=self.user_model,
+            date=None,
+            startup_context=self.startup_context,
+            context=self.context,
+        )
+        self._messages.append({
+            "role": "user",
+            "content": f"[CONTEXT]\n{runtime_ctx}",
+        })
 
         # Append user message
         self._messages.append({"role": "user", "content": user_message})
@@ -390,7 +400,7 @@ class AgentLoop:
                 if consecutive_errors == 3:
                     logger.info("Falling back to tool-free call...")
                     fallback_prompt = (
-                        system_prompt
+                        STATIC_SYSTEM_PROMPT
                         + "\n\n# IMPORTANT OVERRIDE\n"
                         "Tools are temporarily unavailable. Respond ONLY with "
                         "natural conversational text. Do NOT list, reference, or "

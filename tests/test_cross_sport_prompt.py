@@ -1,7 +1,7 @@
-"""Tests for Cross-Sport Reasoning in system prompt.
+"""Tests for Cross-Sport awareness in system prompt and runtime context.
 
 Verifies that:
-- STATIC_SYSTEM_PROMPT contains the Cross-Sport Reasoning section
+- STATIC_SYSTEM_PROMPT contains multi-sport awareness (generalist, not hardcoded rules)
 - Runtime context includes per-sport breakdown for multi-sport athletes
 - Runtime context handles single-sport athletes gracefully
 """
@@ -70,34 +70,42 @@ def _make_load_summary(
 # ---------------------------------------------------------------------------
 
 
-class TestStaticPromptCrossSport:
-    """Verify the Cross-Sport Reasoning section exists in the static prompt."""
+class TestStaticPromptMultiSportAwareness:
+    """Verify the multi-sport awareness section exists in the static prompt."""
 
-    def test_static_prompt_contains_cross_sport_section(self) -> None:
-        """STATIC_SYSTEM_PROMPT includes the Cross-Sport Reasoning header."""
-        assert "## Cross-Sport Reasoning" in STATIC_SYSTEM_PROMPT
+    def test_static_prompt_contains_multi_sport_section(self) -> None:
+        """STATIC_SYSTEM_PROMPT includes multi-sport awareness."""
+        assert "## Multi-Sport Awareness" in STATIC_SYSTEM_PROMPT
 
-    def test_cross_sport_before_self_correction(self) -> None:
-        """Cross-Sport Reasoning appears BEFORE Self-Correction."""
-        cross_idx = STATIC_SYSTEM_PROMPT.index("## Cross-Sport Reasoning")
-        self_idx = STATIC_SYSTEM_PROMPT.index("## Self-Correction")
-        assert cross_idx < self_idx
+    def test_multi_sport_mentions_fatigue(self) -> None:
+        """Multi-sport section references cumulative fatigue."""
+        assert "fatigue" in STATIC_SYSTEM_PROMPT.lower()
 
-    def test_cross_sport_mentions_muscle_overlap(self) -> None:
-        """Cross-Sport Reasoning covers muscle group overlap."""
-        assert "Muscle Group Overlap" in STATIC_SYSTEM_PROMPT
+    def test_multi_sport_mentions_recovery(self) -> None:
+        """Multi-sport section references recovery."""
+        assert "recovery" in STATIC_SYSTEM_PROMPT.lower()
 
-    def test_cross_sport_mentions_energy_system(self) -> None:
-        """Cross-Sport Reasoning covers energy system overlap."""
-        assert "Energy System Overlap" in STATIC_SYSTEM_PROMPT
+    def test_no_hardcoded_sport_rules(self) -> None:
+        """Static prompt does NOT contain hardcoded sport-specific rules."""
+        # These were the old hardcoded cross-sport rules
+        assert "Running + cycling + gym" not in STATIC_SYSTEM_PROMPT
+        assert "Swimming + gym" not in STATIC_SYSTEM_PROMPT
+        assert "CrossFit/Hyrox" not in STATIC_SYSTEM_PROMPT
+        assert "Limit combined HIT sessions to 2-3/week" not in STATIC_SYSTEM_PROMPT
 
-    def test_cross_sport_mentions_recovery_awareness(self) -> None:
-        """Cross-Sport Reasoning covers recovery window awareness."""
-        assert "Recovery Window Awareness" in STATIC_SYSTEM_PROMPT
+    def test_no_hardcoded_vo2max_tables(self) -> None:
+        """Static prompt does NOT contain hardcoded VO2max lookup tables."""
+        assert "5K 24:00 -> VO2max" not in STATIC_SYSTEM_PROMPT
+        assert "10K 42:30 -> VO2max" not in STATIC_SYSTEM_PROMPT
+        assert "Marathon 3:30 -> VO2max" not in STATIC_SYSTEM_PROMPT
+        assert "FTP_per_kg * 10.8" not in STATIC_SYSTEM_PROMPT
 
-    def test_cross_sport_mentions_multi_sport_planning(self) -> None:
-        """Cross-Sport Reasoning covers multi-sport week planning."""
-        assert "Multi-Sport Week Planning" in STATIC_SYSTEM_PROMPT
+    def test_no_hardcoded_sport_expertise_list(self) -> None:
+        """Static prompt does NOT list specific sport categories."""
+        # Old hardcoded expertise list
+        assert "Endurance sports (running, cycling, swimming, triathlon)" not in STATIC_SYSTEM_PROMPT
+        assert "Team sports (basketball, soccer, volleyball" not in STATIC_SYSTEM_PROMPT
+        assert "Combat sports (boxing, martial arts" not in STATIC_SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
