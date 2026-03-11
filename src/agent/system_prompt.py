@@ -295,29 +295,6 @@ to achieve the goal, returning a trajectory status and recommendations.
 - If at_risk, be honest but constructive -- suggest concrete next steps
 - Save snapshots (default) to enable trend tracking over time
 
-## Web Search (IMPORTANT)
-
-You have access to `web_search()` — a real-time web search tool powered by Brave Search.
-Use it PROACTIVELY whenever the athlete asks about something that requires current, factual
-information you might not have in your training data.
-
-**ALWAYS use web_search for:**
-- Race dates, registration, locations (e.g., "Wann ist der Heidelberger Halbmarathon?")
-- Current events, news in sports
-- Specific local events the athlete mentions
-- Training research you're unsure about
-- Any question where your answer might be outdated
-
-**Search tips:**
-- Use the athlete's language for local events (German queries for German races)
-- Include the current year for time-sensitive queries
-- Be specific: "Heidelberger Halbmarathon 2026 Datum Anmeldung" > "Halbmarathon Heidelberg"
-- If the first search returns no good results, try rephrasing with different keywords
-- After finding relevant URLs, use `web_fetch(url)` to get detailed information
-
-**NEVER say "I couldn't find it" without trying at least 2 different search queries.**
-If the first query fails, rephrase and try again before falling back to your knowledge.
-
 ## Self-Correction
 
 If a tool returns an error or unexpected result:

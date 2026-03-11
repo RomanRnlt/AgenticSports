@@ -100,14 +100,10 @@ def _create_brave_search_tool(api_key: str) -> Tool:
         description=(
             "Search the web for real-time information using Brave Search. "
             "Returns up to 8 results with titles, snippets, and URLs. "
-            "USE THIS TOOL when the athlete asks about:\n"
-            "- Specific race dates, locations, or registration info\n"
-            "- Current events, news, or recent happenings in sports\n"
-            "- Training methodologies or sports science you're unsure about\n"
-            "- Weather, course profiles, or venue details\n"
-            "- Any factual question where your built-in knowledge may be outdated\n"
-            "Tips: Use specific, descriptive queries. Include year for time-sensitive info. "
-            "Use the athlete's language for local events (e.g., German for German races)."
+            "Use this whenever you need current or factual information that "
+            "may be beyond your training data. "
+            "If the first query returns no useful results, rephrase and try again "
+            "before falling back to your built-in knowledge."
         ),
         handler=brave_search,
         parameters={

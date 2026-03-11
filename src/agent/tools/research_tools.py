@@ -57,11 +57,10 @@ def register_research_tools(registry: ToolRegistry):
     registry.register(Tool(
         name="web_search",
         description=(
-            "Search the web for real-time information: race dates, events, training "
-            "methodologies, sports science, or any external knowledge. Returns search "
-            "results with titles, snippets, and URLs. Use this when the athlete asks "
-            "about specific events, dates, or facts you might not know. "
-            "Note: Requires SERP_API_KEY or BRAVE_SEARCH_API_KEY to be configured. "
+            "Search the web for real-time information. Returns search results with "
+            "titles, snippets, and URLs. Use this whenever you need current or factual "
+            "information beyond your built-in knowledge. "
+            "Note: Requires SERP_API_KEY to be configured. "
             "If unavailable, use your built-in knowledge and be transparent about it."
         ),
         handler=web_search,
