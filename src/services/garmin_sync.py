@@ -196,21 +196,24 @@ class GarminSyncService:
                     if not stats:
                         continue
 
+                    def _int(val: object) -> int | None:
+                        return int(val) if val is not None else None
+
                     row: dict = {
                         "user_id": user_id,
                         "date": day,
                         "source": "garmin",
-                        "resting_heart_rate": stats.get("restingHeartRate"),
-                        "steps": stats.get("totalSteps"),
-                        "stress_avg": stats.get("averageStressLevel"),
+                        "resting_heart_rate": _int(stats.get("restingHeartRate")),
+                        "steps": _int(stats.get("totalSteps")),
+                        "stress_avg": _int(stats.get("averageStressLevel")),
                         "hrv_avg": (
                             stats.get("hrvSummary") or {}
                         ).get("weeklyAvg"),
-                        "body_battery_high": stats.get("bodyBatteryChargedValue"),
-                        "body_battery_low": stats.get("bodyBatteryDrainedValue"),
-                        "active_calories": stats.get("activeKilocalories"),
-                        "total_calories": stats.get("totalKilocalories"),
-                        "floors_climbed": stats.get("floorsAscended"),
+                        "body_battery_high": _int(stats.get("bodyBatteryChargedValue")),
+                        "body_battery_low": _int(stats.get("bodyBatteryDrainedValue")),
+                        "active_calories": _int(stats.get("activeKilocalories")),
+                        "total_calories": _int(stats.get("totalKilocalories")),
+                        "floors_climbed": _int(stats.get("floorsAscended")),
                     }
 
                     # -- SpO2 -------------------------------------------------
