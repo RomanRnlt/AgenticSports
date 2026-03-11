@@ -595,11 +595,10 @@ def build_runtime_context(
     try:
         from src.config import get_settings
         _settings = get_settings()
-        if _settings.use_supabase and _settings.agenticsports_user_id:
+        _uid = getattr(user_model, "user_id", None) or _settings.agenticsports_user_id
+        if _settings.use_supabase and _uid:
             from src.db.health_data_db import get_cross_source_load_summary
-            load_summary = get_cross_source_load_summary(
-                _settings.agenticsports_user_id, days=7,
-            )
+            load_summary = get_cross_source_load_summary(_uid, days=7)
             if load_summary["total_sessions"] > 0:
                 load_sports_str = ", ".join(load_summary["sports_seen"])
                 sources_str = ", ".join(
@@ -633,14 +632,13 @@ def build_runtime_context(
     try:
         from src.config import get_settings as _get_settings_recovery
         _rs = _get_settings_recovery()
-        if _rs.use_supabase and _rs.agenticsports_user_id:
+        _uid_r = getattr(user_model, "user_id", None) or _rs.agenticsports_user_id
+        if _rs.use_supabase and _uid_r:
             from src.services.health_context import (
                 build_health_summary,
                 format_recovery_context_block,
             )
-            health_summary = build_health_summary(
-                _rs.agenticsports_user_id, days=7,
-            )
+            health_summary = build_health_summary(_uid_r, days=7)
             if health_summary and health_summary["data_available"]:
                 sections.append(format_recovery_context_block(health_summary))
     except Exception:

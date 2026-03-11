@@ -92,11 +92,14 @@ class Settings(BaseSettings):
 
     @property
     def use_supabase(self) -> bool:
-        """Auto-detect: use Supabase when URL + key + user_id are configured."""
+        """Auto-detect: use Supabase when URL + key are configured.
+
+        In multi-tenant API mode the user_id comes from the JWT, not from
+        an env var, so we no longer require agenticsports_user_id here.
+        """
         return bool(
             self.supabase_url
             and (self.supabase_service_role_key or self.supabase_anon_key)
-            and self.agenticsports_user_id
         )
 
 

@@ -57,7 +57,8 @@ def register_data_tools(registry: ToolRegistry, user_model):
 
         if _settings.use_supabase:
             from src.db import list_activities as db_list_activities
-            activities = db_list_activities(_settings.agenticsports_user_id, limit=100)
+            uid = user_model.user_id if user_model else _settings.agenticsports_user_id
+            activities = db_list_activities(uid, limit=100)
         else:
             from src.tools.activity_store import list_activities
             activities = list_activities()
@@ -152,7 +153,8 @@ def register_data_tools(registry: ToolRegistry, user_model):
         """Get the current active training plan."""
         if _settings.use_supabase:
             from src.db import get_active_plan
-            plan_row = get_active_plan(_settings.agenticsports_user_id)
+            uid = user_model.user_id if user_model else _settings.agenticsports_user_id
+            plan_row = get_active_plan(uid)
             if not plan_row:
                 return {"plan": None, "message": "No training plans exist yet."}
             plan_data = plan_row.get("plan_data", {})
