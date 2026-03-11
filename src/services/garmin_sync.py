@@ -144,7 +144,7 @@ class GarminSyncService:
                     "distance_meters": act.get("distance"),
                     "avg_hr": act.get("averageHR"),
                     "max_hr": act.get("maxHR"),
-                    "calories": act.get("calories"),
+                    "calories": int(act["calories"]) if act.get("calories") is not None else None,
                     "training_effect": act.get("trainingEffectLabel") and act.get("aerobicTrainingEffect"),
                     "vo2max_activity": act.get("vO2MaxValue"),
                     "avg_pace_min_km": avg_pace,
