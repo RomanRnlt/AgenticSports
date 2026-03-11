@@ -90,12 +90,62 @@ def register_plan_adjust_tools(registry: ToolRegistry, user_model) -> None:
             logger.error("adjust_plan LLM call failed: %s", exc)
             return {"error": f"Plan adjustment failed: {exc}"}
 
-        # 4. Annotate the adjusted plan with metadata
+        # 4. Evaluate the adjusted plan
+        eval_score = None
+        try:
+            from src.agent.plan_evaluator import evaluate_plan
+
+            evaluation = evaluate_plan(
+                plan=adjusted_plan,
+                profile=profile,
+                user_id=user_id,
+                beliefs=beliefs,
+            )
+            eval_score = evaluation.score
+            logger.info(
+                "adjust_plan evaluation: score=%d acceptable=%s",
+                evaluation.score,
+                evaluation.acceptable,
+            )
+
+            # Retry once if score is below threshold
+            if not evaluation.acceptable:
+                feedback = (
+                    f"The adjusted plan scored {evaluation.score}/100. "
+                    f"Issues: {'; '.join(evaluation.issues)}. "
+                    f"Suggestions: {'; '.join(evaluation.suggestions)}. "
+                    "Please fix these issues in your adjustment."
+                )
+                logger.info("adjust_plan retrying with evaluation feedback")
+                adjusted_plan = _generate_adjustment(
+                    plan_data=plan_data,
+                    instructions=f"{instructions.strip()}\n\nEVALUATION FEEDBACK:\n{feedback}",
+                    profile=profile,
+                    beliefs=beliefs,
+                )
+                retry_eval = evaluate_plan(
+                    plan=adjusted_plan,
+                    profile=profile,
+                    user_id=user_id,
+                    beliefs=beliefs,
+                )
+                eval_score = retry_eval.score
+                logger.info(
+                    "adjust_plan retry evaluation: score=%d acceptable=%s",
+                    retry_eval.score,
+                    retry_eval.acceptable,
+                )
+        except Exception as exc:
+            logger.warning("adjust_plan evaluation failed (non-blocking): %s", exc)
+
+        # 5. Annotate the adjusted plan with metadata
         adjusted_plan["_adjusted_at"] = datetime.now().isoformat()
         adjusted_plan["_adjustment_instructions"] = instructions.strip()
         adjusted_plan["_source_plan_id"] = source_plan_id
+        if eval_score is not None:
+            adjusted_plan["_eval_score"] = eval_score
 
-        # 5. Save as new active plan
+        # 6. Save as new active plan
         try:
             from src.db.plans_db import store_plan
 
@@ -219,7 +269,15 @@ def _generate_adjustment(
         "plan and instructions for how to modify it. Your job is to apply the "
         "requested changes while keeping the rest of the plan intact and "
         "coherent. Return ONLY the complete adjusted plan as valid JSON — "
-        "same structure as the input plan. Do not add commentary outside the JSON."
+        "same structure as the input plan. Do not add commentary outside the JSON.\n\n"
+        "SAFETY CONSTRAINTS (must be maintained after adjustment):\n"
+        "- No consecutive high-intensity days (even across different sports).\n"
+        "- Total weekly volume must not increase by more than 15% vs the original plan.\n"
+        "- Maintain at least one full rest day per week.\n"
+        "- Preserve hard-easy sequencing: when swapping sessions, keep the "
+        "intensity pattern (do not cluster hard days together).\n"
+        "- ~80% of training time should remain at low intensity (Zone 1-2).\n"
+        "- Every session must have a clear physiological purpose."
     )
 
     user_prompt = (

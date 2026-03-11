@@ -11,7 +11,8 @@ Priority 4 -- Audit finding #5 ("Kein Evaluator-Optimizer Loop"):
     the evaluate_plan action after generate_plan.
 
 Evaluation criteria are loaded from the DB (eval_criteria table) per user.
-If no criteria are defined, the plan is accepted by default (score=100).
+If no criteria are defined, science-based DEFAULT_EVAL_CRITERIA are used
+so every plan receives a real quality evaluation.
 """
 
 import json
@@ -26,6 +27,51 @@ PLAN_ACCEPTANCE_THRESHOLD = 70
 
 # Maximum regeneration attempts before accepting best available
 MAX_PLAN_ITERATIONS = 3
+
+# Default evaluation criteria used when no DB criteria exist for the user.
+# Sport-agnostic, grounded in exercise science fundamentals.
+DEFAULT_EVAL_CRITERIA = [
+    {
+        "name": "progressive_overload",
+        "weight": 2.0,
+        "description": (
+            "Hard-easy sequencing: no back-to-back high-intensity days. "
+            "Volume increases max ~10% per week. Deload weeks present every 3-4 weeks."
+        ),
+    },
+    {
+        "name": "intensity_distribution",
+        "weight": 2.0,
+        "description": (
+            "Approximately 80% of training time at low intensity, 20% at moderate-to-high. "
+            "Polarized or pyramidal distribution preferred over threshold-heavy plans."
+        ),
+    },
+    {
+        "name": "recovery_adequacy",
+        "weight": 1.5,
+        "description": (
+            "At least one full rest day per week. Recovery sessions placed after hard days. "
+            "No more than two consecutive training days without a lower-intensity day."
+        ),
+    },
+    {
+        "name": "goal_alignment",
+        "weight": 1.5,
+        "description": (
+            "Session types and volume match the athlete's stated goal event. "
+            "Specificity increases as the target date approaches."
+        ),
+    },
+    {
+        "name": "constraint_compliance",
+        "weight": 1.0,
+        "description": (
+            "Respects the athlete's stated training days per week, max session duration, "
+            "sport preferences, and scheduling constraints."
+        ),
+    },
+]
 
 
 @dataclass
@@ -49,10 +95,10 @@ def evaluate_plan(
     beliefs: list[dict] | None = None,
     assessment: dict | None = None,
 ) -> PlanEvaluation:
-    """Score a plan using agent-defined eval criteria from the DB.
+    """Score a plan using eval criteria from the DB, or science-based defaults.
 
-    When no eval_criteria are defined for the user, the plan is accepted
-    by default (score=100, no issues or suggestions).
+    When no eval_criteria are defined for the user, DEFAULT_EVAL_CRITERIA
+    are used so every plan receives a real evaluation.
 
     Args:
         plan: The generated training plan dict.
@@ -71,16 +117,9 @@ def evaluate_plan(
     except Exception:
         db_criteria = []
 
-    if not db_criteria:
-        return PlanEvaluation(
-            score=100,
-            criteria_scores={},
-            issues=[],
-            suggestions=[],
-            acceptable=True,
-        )
+    criteria = db_criteria if db_criteria else DEFAULT_EVAL_CRITERIA
 
-    system_prompt = _build_dynamic_system_prompt(db_criteria)
+    system_prompt = _build_dynamic_system_prompt(criteria)
     prompt = _build_evaluation_prompt(plan, profile, beliefs, assessment)
 
     response = chat_completion(

@@ -70,7 +70,7 @@ and manage athlete memory. DO NOT guess -- use tools to check.
 5. analyze_health_trends() -- detect multi-day recovery patterns
 6. get_macrocycle() -- check if a macrocycle exists; if yes, determine current week
 7. get_config("eval_criteria") -- load evaluation criteria (define if missing)
-8. web_search() -- research sport-specific methodology, race dates, event info
+8. web_search() -- research sport-specific methodology, race dates, event info. ALWAYS research when the sport is unfamiliar, the athlete has an event-specific goal, or you need current race/event information. Do NOT skip this step for specialized training (triathlon, Hyrox, ultramarathon, etc.).
 9. create_training_plan(macrocycle_week=N) -- generate plan (pass macrocycle_week if active)
 10. evaluate_plan() -- quality check (ALWAYS do this)
 11. If score < 70: create_training_plan(feedback=...) -- regenerate with fixes
