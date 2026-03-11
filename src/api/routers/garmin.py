@@ -42,7 +42,7 @@ class GarminConnectRequest(BaseModel):
 class GarminSyncRequest(BaseModel):
     """Body for POST /garmin/sync."""
 
-    days: int = Field(default=7, ge=1, le=30)
+    days: int | None = Field(default=None, ge=1, le=180)
 
 
 # ---------------------------------------------------------------------------
@@ -137,12 +137,35 @@ async def garmin_sync(
         HTTPException(429): When the sync cooldown is active.
     """
     await _check_sync_cooldown(user_id)
-    days = body.days if body else 7
+
+    explicit_days = body.days if body and body.days is not None else None
+    is_initial = False
+
+    if explicit_days is not None:
+        days = explicit_days
+    else:
+        # Auto-detect: initial sync (180d) vs incremental (3d min)
+        from src.db.provider_tokens_db import get_token
+        token_row = get_token(user_id, "garmin")
+        last_sync = token_row.get("last_sync_at") if token_row else None
+        if last_sync:
+            from datetime import datetime, timezone
+            last_dt = datetime.fromisoformat(last_sync)
+            delta = (datetime.now(timezone.utc) - last_dt).days
+            days = max(delta + 1, 3)
+        else:
+            days = 180
+            is_initial = True
+
+    logger.info("Syncing Garmin for user %s: %d days (initial=%s)", user_id, days, is_initial)
+
     activities_result = GarminSyncService.sync_activities(user_id, days)
     stats_result = GarminSyncService.sync_daily_stats(user_id, days)
+    sleep_result = GarminSyncService.sync_sleep(user_id, days)
     return {
         "activities": activities_result,
         "daily_stats": stats_result,
+        "sleep": sleep_result,
     }
 
 
