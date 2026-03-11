@@ -1,3 +1,6 @@
+# Claude Code
+.claude/
+
 # Environment
 .env
 
@@ -28,6 +31,8 @@ REAGT.md
 NEXT_MILESTONE.md
 GSD-RALPH-CHEATSHEET.md
 AUTONOMOUS_TEST_PROMPT.md
+AUDIT-*.md
+TODO-*.md
 
 # Test reports (generated)
 tests/*.json
