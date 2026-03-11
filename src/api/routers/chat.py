@@ -313,9 +313,12 @@ async def post_chat(
 
     redis = await _get_redis()
 
+    # Frontend sends "new" to indicate a fresh session — normalize to None
+    session_id = body.session_id if body.session_id and body.session_id != "new" else None
+
     generator = _chat_event_generator(
         user_message=body.message,
-        session_id=body.session_id,
+        session_id=session_id,
         user_id=user_id,
         redis=redis,
         context=body.context,
