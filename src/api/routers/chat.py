@@ -271,6 +271,18 @@ async def _chat_event_generator(
         except Exception:
             logger.debug("Could not emit usage event", exc_info=True)
 
+        # Send push notification so the user can return to the chat
+        # if they left the app while the agent was working.
+        # The frontend suppresses this when the user is actively watching.
+        if agent_result_holder:
+            _result = agent_result_holder[0]
+            _response_text = getattr(_result, "response_text", None)
+            if _response_text:
+                asyncio.create_task(
+                    _send_coach_reply_notification(user_id, _response_text),
+                    name=f"push_{user_id}",
+                )
+
     except HTTPException:
         raise
     except Exception:
@@ -371,3 +383,32 @@ async def post_chat_confirm(
         logger.debug("pending_actions update skipped", exc_info=True)
 
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Push notification on agent reply
+# ---------------------------------------------------------------------------
+
+
+async def _send_coach_reply_notification(user_id: str, response_text: str) -> None:
+    """Fire-and-forget push notification that the coach has replied.
+
+    The frontend notification handler suppresses this when the user is
+    actively streaming the response.  When the app is in the background
+    iOS/Android show it as a banner notification.
+    """
+    from src.agent.tools.notification_tools import send_notification_async
+
+    preview = response_text[:120]
+    if len(response_text) > 120:
+        preview += "…"
+
+    try:
+        await send_notification_async(
+            user_id=user_id,
+            title="Coach hat geantwortet",
+            body=preview,
+            data={"type": "coach_response", "navigate": "coach"},
+        )
+    except Exception:
+        logger.debug("Coach reply push notification failed", exc_info=True)
