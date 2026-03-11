@@ -178,7 +178,15 @@ async def garmin_disconnect(
     Returns:
         ``{"status": "disconnected"}``
     """
+    from src.db.client import get_supabase
     from src.db.provider_tokens_db import delete_token
+
+    db = get_supabase()
+
+    # Delete all synced Garmin data for this user
+    db.table("activities").delete().eq("user_id", user_id).eq("source", "garmin").execute()
+    db.table("health_daily_metrics").delete().eq("user_id", user_id).eq("source", "garmin").execute()
+    logger.info("Deleted all Garmin data for user %s", user_id)
 
     delete_token(user_id, "garmin")
 
