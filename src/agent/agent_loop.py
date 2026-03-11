@@ -395,7 +395,8 @@ class AgentLoop:
                     round_num, consecutive_errors,
                 )
                 if consecutive_errors >= 3:
-                    return "Es tut mir leid, ich habe gerade technische Schwierigkeiten. Bitte versuche es nochmal."
+                    result.response_text = "Es tut mir leid, ich habe gerade technische Schwierigkeiten. Bitte versuche es nochmal."
+                    return result
                 continue
 
             message = response.choices[0].message
