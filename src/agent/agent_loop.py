@@ -173,6 +173,7 @@ class AgentLoop:
             }
             if metadata:
                 entry["meta"] = metadata
+            self._session_file.parent.mkdir(parents=True, exist_ok=True)
             with self._session_file.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 

@@ -33,7 +33,7 @@ router = APIRouter(tags=["onboarding"])
 # Constants
 # ---------------------------------------------------------------------------
 
-_PARSE_MODEL = "gemini/gemini-2.0-flash-lite"
+_PARSE_MODEL = "gemini/gemini-2.0-flash"
 
 _SPORT_SYSTEM_PROMPT = (
     "Extract sport/activity names from the user's German text.\n"
