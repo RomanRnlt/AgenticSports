@@ -107,12 +107,8 @@ class GarminSyncService:
     def sync_activities(user_id: str, days: int = 7) -> dict:
         """Sync recent activities from Garmin into the activities table.
 
-        Args:
-            user_id: Supabase user UUID.
-            days: How many days back to fetch (1–30).
-
-        Returns:
-            Summary dict with ``status``, ``synced``, ``skipped``, ``days``.
+        Extracts training_effect, vo2max, calories, pace, and elevation
+        in addition to the base fields.
         """
         try:
             garmin, _ = GarminSyncService._restore_session(user_id)
@@ -134,6 +130,12 @@ class GarminSyncService:
                     skipped += 1
                     continue
 
+                # Pace: convert avg speed (m/s) to min/km
+                avg_speed = act.get("averageSpeed")
+                avg_pace = None
+                if avg_speed and avg_speed > 0:
+                    avg_pace = round(1000 / (avg_speed * 60), 2)
+
                 row = {
                     "user_id": user_id,
                     "sport": act.get("activityType", {}).get("typeKey", "unknown"),
@@ -142,6 +144,11 @@ class GarminSyncService:
                     "distance_meters": act.get("distance"),
                     "avg_hr": act.get("averageHR"),
                     "max_hr": act.get("maxHR"),
+                    "calories": act.get("calories"),
+                    "training_effect": act.get("trainingEffectLabel") and act.get("aerobicTrainingEffect"),
+                    "vo2max_activity": act.get("vO2MaxValue"),
+                    "avg_pace_min_km": avg_pace,
+                    "elevation_gain_m": act.get("elevationGain"),
                     "source": "garmin",
                     "garmin_activity_id": garmin_id,
                     "raw_data": act,
@@ -165,17 +172,16 @@ class GarminSyncService:
 
     @staticmethod
     def sync_daily_stats(user_id: str, days: int = 7) -> dict:
-        """Sync daily health stats (steps, HR, stress) from Garmin.
+        """Sync daily health stats from Garmin.
 
-        Args:
-            user_id: Supabase user UUID.
-            days: How many days back to fetch (1–30).
-
-        Returns:
-            Summary dict with ``status``, ``synced``, ``days``.
+        Fetches get_stats (base metrics), get_spo2_data, get_respiration_data,
+        get_max_metrics (VO2Max), get_floors, and get_intensity_minutes_data
+        for each day and merges them into a single upsert per day.
         """
         try:
             garmin, _ = GarminSyncService._restore_session(user_id)
+            from src.db.client import get_supabase
+            client = get_supabase()
             synced = 0
 
             for i in range(days):
@@ -184,37 +190,82 @@ class GarminSyncService:
                 ).isoformat()
                 try:
                     stats = garmin.get_stats(day)
-                    if stats:
-                        from src.db.client import get_supabase
-                        client = get_supabase()
-                        client.table("health_daily_metrics").upsert(
-                            {
-                                "user_id": user_id,
-                                "date": day,
-                                "source": "garmin",
-                                "resting_heart_rate": stats.get("restingHeartRate"),
-                                "steps": stats.get("totalSteps"),
-                                "stress_avg": stats.get("averageStressLevel"),
-                                "hrv_avg": (
-                                    stats.get("hrvSummary", {}) or {}
-                                ).get("weeklyAvg"),
-                                "body_battery_high": stats.get(
-                                    "bodyBatteryChargedValue"
-                                ),
-                                "body_battery_low": stats.get(
-                                    "bodyBatteryDrainedValue"
-                                ),
-                                "active_calories": stats.get(
-                                    "activeKilocalories"
-                                ),
-                                "total_calories": stats.get(
-                                    "totalKilocalories"
-                                ),
-                                "raw_data": stats,
-                            },
-                            on_conflict="user_id,date,source",
-                        ).execute()
-                        synced += 1
+                    if not stats:
+                        continue
+
+                    row: dict = {
+                        "user_id": user_id,
+                        "date": day,
+                        "source": "garmin",
+                        "resting_heart_rate": stats.get("restingHeartRate"),
+                        "steps": stats.get("totalSteps"),
+                        "stress_avg": stats.get("averageStressLevel"),
+                        "hrv_avg": (
+                            stats.get("hrvSummary") or {}
+                        ).get("weeklyAvg"),
+                        "body_battery_high": stats.get("bodyBatteryChargedValue"),
+                        "body_battery_low": stats.get("bodyBatteryDrainedValue"),
+                        "active_calories": stats.get("activeKilocalories"),
+                        "total_calories": stats.get("totalKilocalories"),
+                        "floors_climbed": stats.get("floorsAscended"),
+                    }
+
+                    # -- SpO2 -------------------------------------------------
+                    try:
+                        spo2 = garmin.get_spo2_data(day)
+                        if spo2:
+                            row["spo2_avg"] = (
+                                spo2.get("averageSpO2")
+                                or spo2.get("allDaySpO2", {}).get("averageSpO2Value")
+                            )
+                    except Exception:
+                        logger.debug("SpO2 unavailable for %s", day)
+
+                    # -- Respiration ------------------------------------------
+                    try:
+                        resp = garmin.get_respiration_data(day)
+                        if resp:
+                            row["respiration_avg"] = resp.get("avgWakingRespirationValue")
+                    except Exception:
+                        logger.debug("Respiration unavailable for %s", day)
+
+                    # -- VO2Max -----------------------------------------------
+                    try:
+                        maxm = garmin.get_max_metrics(day)
+                        if maxm and isinstance(maxm, dict):
+                            generic = maxm.get("generic", {}) or {}
+                            row["vo2max"] = generic.get("vo2MaxPreciseValue") or generic.get("vo2MaxValue")
+                        elif isinstance(maxm, list) and len(maxm) > 0:
+                            first = maxm[0]
+                            generic = first.get("generic", {}) or {}
+                            row["vo2max"] = generic.get("vo2MaxPreciseValue") or generic.get("vo2MaxValue")
+                    except Exception:
+                        logger.debug("VO2Max unavailable for %s", day)
+
+                    # -- Intensity minutes ------------------------------------
+                    try:
+                        im = garmin.get_intensity_minutes_data(day)
+                        if im:
+                            moderate = im.get("moderateIntensityMinutes", 0) or 0
+                            vigorous = im.get("vigorousIntensityMinutes", 0) or 0
+                            row["intensity_minutes"] = moderate + vigorous
+                    except Exception:
+                        logger.debug("Intensity minutes unavailable for %s", day)
+
+                    # -- Floors (fallback if not in stats) --------------------
+                    if not row.get("floors_climbed"):
+                        try:
+                            floors = garmin.get_floors(day)
+                            if floors:
+                                row["floors_climbed"] = floors.get("floorsAscended")
+                        except Exception:
+                            pass
+
+                    row["raw_data"] = stats
+                    client.table("health_daily_metrics").upsert(
+                        row, on_conflict="user_id,date,source",
+                    ).execute()
+                    synced += 1
                 except Exception:
                     logger.debug(
                         "Failed to sync daily stats for %s", day, exc_info=True
@@ -234,17 +285,15 @@ class GarminSyncService:
 
     @staticmethod
     def sync_sleep(user_id: str, days: int = 7) -> dict:
-        """Sync sleep data from Garmin.
+        """Sync sleep data including stages from Garmin.
 
-        Args:
-            user_id: Supabase user UUID.
-            days: How many days back to fetch (1–30).
-
-        Returns:
-            Summary dict with ``status``, ``synced``, ``days``.
+        Extracts total duration, sleep score, and per-stage durations
+        (deep, light, REM, awake) from the dailySleepDTO.
         """
         try:
             garmin, _ = GarminSyncService._restore_session(user_id)
+            from src.db.client import get_supabase
+            client = get_supabase()
             synced = 0
 
             for i in range(days):
@@ -253,32 +302,42 @@ class GarminSyncService:
                 ).isoformat()
                 try:
                     sleep = garmin.get_sleep_data(day)
-                    if sleep:
-                        from src.db.client import get_supabase
-                        client = get_supabase()
-                        daily_dto = sleep.get("dailySleepDTO", {})
-                        sleep_score = (
-                            daily_dto.get("sleepScores", {})
-                            .get("overall", {})
-                            .get("value")
-                        )
-                        sleep_seconds = daily_dto.get("sleepTimeSeconds")
-                        sleep_minutes = (
-                            sleep_seconds / 60
-                            if sleep_seconds is not None
-                            else None
-                        )
-                        client.table("health_daily_metrics").upsert(
-                            {
-                                "user_id": user_id,
-                                "date": day,
-                                "source": "garmin",
-                                "sleep_score": sleep_score,
-                                "sleep_duration_minutes": sleep_minutes,
-                            },
-                            on_conflict="user_id,date,source",
-                        ).execute()
-                        synced += 1
+                    if not sleep:
+                        continue
+
+                    daily_dto = sleep.get("dailySleepDTO") or {}
+                    sleep_score = (
+                        (daily_dto.get("sleepScores") or {})
+                        .get("overall", {})
+                        .get("value")
+                    )
+                    sleep_seconds = daily_dto.get("sleepTimeSeconds")
+                    sleep_minutes = (
+                        round(sleep_seconds / 60, 1)
+                        if sleep_seconds is not None
+                        else None
+                    )
+
+                    # Sleep stages (seconds → minutes)
+                    def _s2m(key: str) -> float | None:
+                        val = daily_dto.get(key)
+                        return round(val / 60, 1) if val is not None else None
+
+                    client.table("health_daily_metrics").upsert(
+                        {
+                            "user_id": user_id,
+                            "date": day,
+                            "source": "garmin",
+                            "sleep_score": sleep_score,
+                            "sleep_duration_minutes": sleep_minutes,
+                            "sleep_deep_minutes": _s2m("deepSleepSeconds"),
+                            "sleep_light_minutes": _s2m("lightSleepSeconds"),
+                            "sleep_rem_minutes": _s2m("remSleepSeconds"),
+                            "sleep_awake_minutes": _s2m("awakeSleepSeconds"),
+                        },
+                        on_conflict="user_id,date,source",
+                    ).execute()
+                    synced += 1
                 except Exception:
                     logger.debug(
                         "Failed to sync sleep for %s", day, exc_info=True

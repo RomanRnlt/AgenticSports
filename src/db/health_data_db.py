@@ -180,6 +180,10 @@ def get_merged_daily_metrics(
             "date": r.get("date", "")[:10],
             "sleep_minutes": r.get("sleep_duration_minutes"),
             "sleep_score": r.get("sleep_score"),
+            "sleep_deep_minutes": r.get("sleep_deep_minutes"),
+            "sleep_light_minutes": r.get("sleep_light_minutes"),
+            "sleep_rem_minutes": r.get("sleep_rem_minutes"),
+            "sleep_awake_minutes": r.get("sleep_awake_minutes"),
             "hrv": r.get("hrv_avg"),
             "resting_hr": r.get("resting_heart_rate"),
             "stress": r.get("stress_avg"),
@@ -187,6 +191,11 @@ def get_merged_daily_metrics(
             "body_battery_low": r.get("body_battery_low"),
             "recovery_score": r.get("recovery_score"),
             "steps": r.get("steps"),
+            "vo2max": r.get("vo2max"),
+            "spo2_avg": r.get("spo2_avg"),
+            "respiration_avg": r.get("respiration_avg"),
+            "intensity_minutes": r.get("intensity_minutes"),
+            "floors_climbed": r.get("floors_climbed"),
             "source": r.get("source", "unknown"),
         }
         for r in rows
