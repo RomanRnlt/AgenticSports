@@ -40,18 +40,18 @@ graph TD
     E --> E2["Memory · Health · Config"]
     E --> E3["Products · Notifications · Research"]
 
-    E1 --> F["CalcEngine\nFormula Evaluator"]
-    E2 --> G["Belief Store\npgvector"]
+    E1 --> F["CalcEngine<br/>Formula Evaluator"]
+    E2 --> G["Belief Store<br/>pgvector"]
     E1 --> H["Context Builder"]
 
     F -->|"agent-defined formulas"| H
     G -->|"confidence · embeddings"| H
     H -->|"last session · 7d · 28d"| C
 
-    B --> I[("Supabase\nPostgreSQL")]
-    B --> J[("Redis\nLocks · Cache")]
+    B --> I[("Supabase<br/>PostgreSQL")]
+    B --> J[("Redis<br/>Locks · Cache")]
     B --> K["Background Services"]
-    K --> K1["Heartbeat · Garmin Sync\nSession Summarizer\nEpisode Consolidation"]
+    K --> K1["Heartbeat · Garmin Sync<br/>Session Summarizer<br/>Episode Consolidation"]
 
     style B fill:#009688,stroke:#fff,color:#fff
     style C fill:#e94560,stroke:#fff,color:#fff
