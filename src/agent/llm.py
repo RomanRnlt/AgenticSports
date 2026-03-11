@@ -67,7 +67,7 @@ def chat_completion(
     # when tools + large system prompts are combined, otherwise they
     # return empty responses with zero completion tokens.
     if "gemini-2.5" in resolved_model:
-        kwargs["thinking"] = {"type": "enabled", "budget_tokens": 4096}
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": 8192}
 
     response = litellm.completion(**kwargs)
     return response
