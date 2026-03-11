@@ -13,9 +13,10 @@ from src.agent.tools.registry import Tool, ToolRegistry
 from src.config import get_settings
 
 
-def register_health_tools(registry: ToolRegistry) -> None:
+def register_health_tools(registry: ToolRegistry, user_id: str = None) -> None:
     """Register all health data tools."""
     _settings = get_settings()
+    _resolved_uid = user_id or _settings.agenticsports_user_id
 
     def get_health_data(
         days: int = 28,
@@ -30,7 +31,7 @@ def register_health_tools(registry: ToolRegistry) -> None:
         )
         from src.db import list_activities as list_agent_activities
 
-        user_id = _settings.agenticsports_user_id
+        user_id = _resolved_uid
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
         activities: list[dict] = []
@@ -164,7 +165,7 @@ def register_health_tools(registry: ToolRegistry) -> None:
         """Get daily health metrics (sleep, HRV, stress, body battery, recovery)."""
         from src.db.health_data_db import get_merged_daily_metrics
 
-        user_id = _settings.agenticsports_user_id
+        user_id = _resolved_uid
         metrics = get_merged_daily_metrics(user_id, days=days)
 
         return {"count": len(metrics), "metrics": metrics}

@@ -74,7 +74,7 @@ def _build_recovery_planning_context(user_id: str | None) -> str | None:
         return None  # Non-critical — plan generation continues without recovery context
 
 
-def _build_macrocycle_week_context(week_number: int, settings=None) -> str | None:
+def _build_macrocycle_week_context(week_number: int, settings=None, user_id: str = None) -> str | None:
     """Load the active macrocycle and extract context for the given week.
 
     Returns a formatted string for prompt injection, or None on failure.
@@ -85,8 +85,9 @@ def _build_macrocycle_week_context(week_number: int, settings=None) -> str | Non
         if not settings.use_supabase:
             return None
 
+        uid = user_id or settings.agenticsports_user_id
         from src.db.macrocycle_db import get_active_macrocycle
-        macrocycle = get_active_macrocycle(settings.agenticsports_user_id)
+        macrocycle = get_active_macrocycle(uid)
         if not macrocycle:
             return None
 
@@ -151,7 +152,7 @@ def register_planning_tools(registry: ToolRegistry, user_model):
 
         profile = user_model.project_profile()
         beliefs = user_model.get_active_beliefs(min_confidence=0.6)
-        uid = _settings.agenticsports_user_id if _settings.use_supabase else ""
+        uid = (getattr(user_model, "user_id", None) or _settings.agenticsports_user_id) if _settings.use_supabase else ""
 
         if _settings.use_supabase:
             from src.db import list_activities as db_list_activities
@@ -183,7 +184,7 @@ def register_planning_tools(registry: ToolRegistry, user_model):
 
         # Inject macrocycle week context when specified
         if macrocycle_week is not None:
-            macro_context = _build_macrocycle_week_context(macrocycle_week, settings=_settings)
+            macro_context = _build_macrocycle_week_context(macrocycle_week, settings=_settings, user_id=uid)
             if macro_context:
                 base_prompt += f"\n\n{macro_context}"
 
@@ -300,7 +301,7 @@ def register_planning_tools(registry: ToolRegistry, user_model):
             score = evaluation.get("score") if evaluation else None
             feedback = evaluation.get("feedback") if evaluation else None
             row = store_plan(
-                _settings.agenticsports_user_id, plan,
+                getattr(user_model, "user_id", None) or _settings.agenticsports_user_id, plan,
                 evaluation_score=score, evaluation_feedback=feedback,
             )
             return {"saved": True, "id": row["id"]}

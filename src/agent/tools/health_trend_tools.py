@@ -9,15 +9,16 @@ from src.agent.tools.registry import Tool, ToolRegistry
 from src.config import get_settings
 
 
-def register_health_trend_tools(registry: ToolRegistry) -> None:
+def register_health_trend_tools(registry: ToolRegistry, user_id: str = None) -> None:
     """Register health trend analysis tools."""
     _settings = get_settings()
+    _resolved_uid = user_id or _settings.agenticsports_user_id
 
     def analyze_health_trends(metric: str = "all", days: int = 14) -> dict:
         """Analyze health metric trends over time."""
         from src.db.health_data_db import get_merged_daily_metrics
 
-        user_id = _settings.agenticsports_user_id
+        user_id = _resolved_uid
         metrics = get_merged_daily_metrics(user_id, days=days)
 
         if not metrics:

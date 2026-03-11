@@ -24,9 +24,17 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+def _resolve_user_id(user_model, settings) -> str:
+    """Return the user ID from the model, falling back to settings."""
+    if user_model and getattr(user_model, "user_id", None):
+        return user_model.user_id
+    return settings.agenticsports_user_id
+
+
 def register_macrocycle_tools(registry: ToolRegistry, user_model) -> None:
     """Register macrocycle planning tools on the given *registry*."""
     _settings = get_settings()
+    _user_id = _resolve_user_id(user_model, _settings)
 
     def create_macrocycle_plan(
         name: str,
@@ -63,7 +71,7 @@ def register_macrocycle_tools(registry: ToolRegistry, user_model) -> None:
             try:
                 from src.db.agent_config_db import get_periodization_model
                 model_data = get_periodization_model(
-                    _settings.agenticsports_user_id,
+                    _user_id,
                     periodization_model,
                 )
             except Exception as exc:
@@ -80,7 +88,7 @@ def register_macrocycle_tools(registry: ToolRegistry, user_model) -> None:
                 from src.db import list_activities as db_list_activities
                 cutoff = (date.today() - timedelta(days=28)).isoformat()
                 activities = db_list_activities(
-                    _settings.agenticsports_user_id,
+                    _user_id,
                     limit=50,
                     after=cutoff,
                 )
@@ -93,7 +101,7 @@ def register_macrocycle_tools(registry: ToolRegistry, user_model) -> None:
             try:
                 from src.services.health_context import build_health_summary
                 health_summary = build_health_summary(
-                    _settings.agenticsports_user_id,
+                    _user_id,
                     days=7,
                 )
             except Exception as exc:
@@ -176,7 +184,7 @@ def register_macrocycle_tools(registry: ToolRegistry, user_model) -> None:
 
         try:
             from src.db.macrocycle_db import get_active_macrocycle
-            macrocycle = get_active_macrocycle(_settings.agenticsports_user_id)
+            macrocycle = get_active_macrocycle(_user_id)
             if not macrocycle:
                 return {"error": "No active macrocycle found. Use create_macrocycle_plan to create one."}
             return macrocycle
@@ -224,7 +232,7 @@ def register_macrocycle_tools(registry: ToolRegistry, user_model) -> None:
         try:
             from src.db.macrocycle_db import store_macrocycle
             row = store_macrocycle(
-                user_id=_settings.agenticsports_user_id,
+                user_id=_user_id,
                 name=name,
                 total_weeks=total_weeks,
                 start_date=start_date,

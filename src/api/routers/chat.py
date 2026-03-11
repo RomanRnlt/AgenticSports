@@ -201,7 +201,7 @@ async def _chat_event_generator(
             # Config GC: clean up stale configs in the background.
             try:
                 from src.services.config_gc import run_config_gc
-                asyncio.to_thread(run_config_gc, user_id)
+                asyncio.create_task(asyncio.to_thread(run_config_gc, user_id))
             except Exception:
                 logger.debug("Config GC skipped", exc_info=True)
 

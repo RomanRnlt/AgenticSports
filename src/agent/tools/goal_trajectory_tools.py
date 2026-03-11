@@ -62,7 +62,7 @@ def register_goal_trajectory_tools(
             }
 
         # 3. Get user_id
-        user_id = settings.agenticsports_user_id
+        user_id = getattr(user_model, "user_id", None) or settings.agenticsports_user_id
         if not user_id:
             return {"error": "No user configured", "trajectory_status": "insufficient_data"}
 

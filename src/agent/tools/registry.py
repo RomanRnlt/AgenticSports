@@ -125,9 +125,16 @@ def get_restricted_tools(user_model) -> ToolRegistry:
     from src.agent.tools.health_inventory_tools import register_health_inventory_tools
     from src.agent.tools.goal_trajectory_tools import register_goal_trajectory_tools
 
+    from src.config import get_settings as _gs
+    _uid = (
+        user_model.user_id
+        if hasattr(user_model, "user_id")
+        else _gs().agenticsports_user_id
+    )
+
     register_data_tools(registry, user_model)
-    register_health_tools(registry)
-    register_health_trend_tools(registry)
+    register_health_tools(registry, user_id=_uid)
+    register_health_trend_tools(registry, user_id=_uid)
     register_health_inventory_tools(registry)
     register_analysis_tools(registry)
     register_calc_tools(registry, user_model)
@@ -183,8 +190,8 @@ def get_default_tools(user_model, context: str = "coach") -> ToolRegistry:
     )
 
     register_data_tools(registry, user_model)
-    register_health_tools(registry)
-    register_health_trend_tools(registry)
+    register_health_tools(registry, user_id=_user_id)
+    register_health_trend_tools(registry, user_id=_user_id)
     register_health_inventory_tools(registry)
     register_analysis_tools(registry)
     register_planning_tools(registry, user_model)
