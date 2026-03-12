@@ -112,24 +112,32 @@ def save_message(
     ).execute()
 
 
-def load_session_messages(session_id: str) -> list[dict]:
-    """Load all messages for a session, ordered chronologically.
+def load_session_messages(session_id: str, max_messages: int = 60) -> list[dict]:
+    """Load the most recent messages for a session, ordered chronologically.
+
+    Limits the number of raw messages loaded to prevent context explosion
+    when sessions grow very long (e.g. 100+ messages from repeated
+    tool-call retry loops). Only the most recent messages are returned.
 
     Args:
         session_id: UUID of the session.
+        max_messages: Maximum number of raw messages to load (default 60).
 
     Returns:
-        List of message dicts (``role``, ``content``, ``meta``, ``created_at``).
+        List of message dicts (``role``, ``content``, ``meta``, ``created_at``),
+        in chronological order.
     """
     result = (
         get_supabase()
         .table("session_messages")
         .select("*")
         .eq("session_id", session_id)
-        .order("id")
+        .order("id", desc=True)
+        .limit(max_messages)
         .execute()
     )
-    return result.data
+    # Reverse to chronological order
+    return list(reversed(result.data))
 
 
 # ---------------------------------------------------------------------------

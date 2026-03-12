@@ -77,6 +77,9 @@ class AgentResult:
 ProgressCallback = Callable[[str, str], None] | None
 
 
+_MAX_LOADED_PAIRS = 16  # Max user/assistant pairs to keep from session history
+
+
 def _extract_user_assistant_pairs(rows: list[dict], source: str = "supabase") -> list[dict]:
     """Build a well-formed user/assistant message list from raw DB rows.
 
@@ -90,6 +93,7 @@ def _extract_user_assistant_pairs(rows: list[dict], source: str = "supabase") ->
     1. Collects tool_call results as context between user turns
     2. Ensures every user message is followed by an assistant message
     3. Synthesizes brief assistant placeholders where model responses are missing
+    4. Limits output to the last _MAX_LOADED_PAIRS user/assistant pairs
     """
     messages: list[dict] = []
     pending_tool_summaries: list[str] = []
@@ -130,6 +134,14 @@ def _extract_user_assistant_pairs(rows: list[dict], source: str = "supabase") ->
 
     # If the conversation ends with a user message, that's fine —
     # the agent loop will add the new user message after this
+
+    # Limit to last N pairs to prevent context explosion on long sessions
+    if len(messages) > _MAX_LOADED_PAIRS * 2:
+        messages = messages[-(_MAX_LOADED_PAIRS * 2):]
+        # Ensure we start with a user message
+        while messages and messages[0]["role"] != "user":
+            messages.pop(0)
+
     return messages
 
 
@@ -395,21 +407,28 @@ class AgentLoop:
         # Compress history before adding new message (Gap 2)
         self._compress_history()
 
-        # Inject runtime context as FIRST user message (before the athlete's message).
-        # This keeps the system prompt cacheable while providing per-request context.
+        # Inject runtime context together with the user message to avoid
+        # consecutive "user" messages (Gemini requires alternating turns).
         runtime_ctx = build_runtime_context(
             user_model=self.user_model,
             date=None,
             startup_context=self.startup_context,
             context=self.context,
         )
+
+        # If the last loaded message is "user", insert a synthetic assistant
+        # reply to maintain alternating turn structure for Gemini.
+        if self._messages and self._messages[-1]["role"] == "user":
+            self._messages.append({
+                "role": "assistant",
+                "content": "[Continuing from our previous conversation.]",
+            })
+
+        # Combine context + user message into a single user turn
         self._messages.append({
             "role": "user",
-            "content": f"[CONTEXT]\n{runtime_ctx}",
+            "content": f"[CONTEXT]\n{runtime_ctx}\n\n[USER MESSAGE]\n{user_message}",
         })
-
-        # Append user message
-        self._messages.append({"role": "user", "content": user_message})
 
         # Persist user turn (Gap 1)
         self._save_turn("user", user_message)
